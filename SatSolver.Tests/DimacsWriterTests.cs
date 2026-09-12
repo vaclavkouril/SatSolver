@@ -36,4 +36,31 @@ public class DimacsWriterTests
         Assert.Throws<ArgumentException>(() => new DimacsWriter().Write(duplicate, new StringWriter()));
         Assert.Throws<ArgumentException>(() => new DimacsWriter().Write(opposite, new StringWriter()));
     }
+
+    [Fact]
+    public void Write_DescribesVariablesAndTheRootLiteralInComments()
+    {
+        var formula = new CnfFormula(2, [new Clause([new Literal(2, false)])])
+        {
+            Variables =
+            [
+                new CnfVariable(1, "a", CnfVariableKind.Original),
+                new CnfVariable(2, "or gate", CnfVariableKind.Auxiliary)
+            ],
+            RootLiteral = 2
+        };
+        using var output = new StringWriter();
+
+        new DimacsWriter().Write(formula, output);
+
+        Assert.Equal(
+            "c Original variables:" + Environment.NewLine +
+            "c   1: a" + Environment.NewLine +
+            "c Auxiliary gate variables:" + Environment.NewLine +
+            "c   2: or gate" + Environment.NewLine +
+            "c Root formula literal: 2" + Environment.NewLine +
+            "p cnf 2 1" + Environment.NewLine +
+            "2 0" + Environment.NewLine,
+            output.ToString());
+    }
 }

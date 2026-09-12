@@ -30,4 +30,13 @@ public class FormulaReaderTests
 
         Assert.Throws<FormatException>(() => reader.Read(new StringReader(input)));
     }
+
+    [Fact]
+    public void Read_ReportsTheLocationOfALexicalError()
+    {
+        var exception = Assert.Throws<FormatException>(
+            () => new FormulaReader().Read(new StringReader("(and a\n @)")));
+
+        Assert.Contains("Line 2, column 2", exception.Message);
+    }
 }

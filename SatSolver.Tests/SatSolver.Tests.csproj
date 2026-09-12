@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\SatSolver.Core\SatSolver.Core.csproj" />
     <ProjectReference Include="..\SatSolver.IO\SatSolver.IO.csproj" />
+    <ProjectReference Include="..\Formula2Cnf\Formula2Cnf.csproj" />
   </ItemGroup>
 
 </Project>
