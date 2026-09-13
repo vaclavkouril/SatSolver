@@ -5,6 +5,7 @@ internal enum DimacsTokenKind
     Comment,
     Word,
     Integer,
+    EndMarker,
     EndOfInput
 }
 
@@ -15,6 +16,7 @@ internal sealed record DimacsToken(DimacsTokenKind Kind, string Text, int Line, 
         DimacsTokenKind.Comment => "a comment",
         DimacsTokenKind.Word => $"'{Text}'",
         DimacsTokenKind.Integer => $"integer '{Text}'",
+        DimacsTokenKind.EndMarker => "end marker '%'",
         DimacsTokenKind.EndOfInput => "end of input",
         _ => throw new InvalidOperationException("Unknown token kind.")
     };
