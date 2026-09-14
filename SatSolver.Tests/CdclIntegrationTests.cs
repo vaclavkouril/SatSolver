@@ -2,10 +2,8 @@ using System.Diagnostics;
 
 namespace SatSolver.Tests;
 
-/// <summary>Tests the <c>cdcl</c> command-line application.</summary>
 public sealed class CdclIntegrationTests
 {
-    /// <summary>Verifies default CDCL execution.</summary>
     [Fact]
     public async Task Main_SatInput_WritesModelAndStatistics()
     {
@@ -21,7 +19,6 @@ public sealed class CdclIntegrationTests
         Assert.Contains("Conflicts:", result.StandardOutput);
     }
 
-    /// <summary>Verifies CDCL strategy selection.</summary>
     [Theory]
     [InlineData("adjacency", "decision", "recursive", "geometric", "activity")]
     [InlineData("watched", "multiple", "ssr", "luby", "lbd")]
@@ -49,7 +46,6 @@ public sealed class CdclIntegrationTests
         Assert.StartsWith("SAT" + Environment.NewLine, result.StandardOutput);
     }
 
-    /// <summary>Verifies standard-input format and tuning options.</summary>
     [Fact]
     public async Task Main_StandardInputAndTuning_WritesSatResult()
     {
@@ -67,6 +63,30 @@ public sealed class CdclIntegrationTests
             "--deletion-growth", "1.25",
             "--keep-lbd", "2",
             "--deletion-fraction", "0.5");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.StartsWith("SAT" + Environment.NewLine, result.StandardOutput);
+    }
+
+    [Theory]
+    [InlineData("first")]
+    [InlineData("random")]
+    [InlineData("jw")]
+    [InlineData("vsids")]
+    public async Task Main_DecisionHeuristic_WritesSatResult(string heuristic)
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var inputPath = Path.Combine(repositoryRoot, "task-1", "toy_5.sat");
+        var arguments = new List<string> { "--heuristic", heuristic };
+
+        if (heuristic is "random" or "vsids")
+        {
+            arguments.Add("--seed");
+            arguments.Add("17");
+        }
+
+        arguments.Add(inputPath);
+        var result = await RunCdcl(repositoryRoot, null, arguments.ToArray());
 
         Assert.Equal(0, result.ExitCode);
         Assert.StartsWith("SAT" + Environment.NewLine, result.StandardOutput);

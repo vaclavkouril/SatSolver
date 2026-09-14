@@ -1,11 +1,16 @@
 using SatSolver.Core.Solving.Clauses;
-using SatSolver.Core.Solving.Cdcl.Configuration;
 
 namespace SatSolver.Core.Solving.Cdcl.Deletion;
 
-/// <summary>Ranks eligible clauses by LBD and then by activity.</summary>
-internal sealed class LbdThenActivityClauseDeletionPolicy(ClauseDeletionSettings settings) : ClauseDeletionPolicy(settings)
+public sealed class LbdThenActivityClauseDeletionPolicy : ClauseDeletionPolicy
 {
+    public LbdThenActivityClauseDeletionPolicy(
+        int permanentLbdLimit = 2,
+        double deletionFraction = 0.5)
+        : base(permanentLbdLimit, deletionFraction)
+    {
+    }
+
     protected override IOrderedEnumerable<SolverClause> OrderCandidates(
         IEnumerable<SolverClause> candidates) =>
         candidates.OrderByDescending(clause => clause.Lbd)

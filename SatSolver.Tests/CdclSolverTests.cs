@@ -1,15 +1,15 @@
 using SatSolver.Core.Cnf;
 using SatSolver.Core.Solving.Cdcl;
-using SatSolver.Core.Solving.Cdcl.Configuration;
+using SatSolver.Core.Solving.Cdcl.Analysis;
+using SatSolver.Core.Solving.Cdcl.Deletion;
+using SatSolver.Core.Solving.Cdcl.Restarts;
 using SatSolver.Core.Solving.Contracts;
 using SatSolver.Core.Solving.Heuristics;
 
 namespace SatSolver.Tests;
 
-/// <summary>Tests the CDCL solver.</summary>
 public sealed class CdclSolverTests
 {
-    /// <summary>Verifies root-level unit propagation.</summary>
     [Fact]
     public void Solve_UnitClauseChain_ReturnsSat()
     {
@@ -23,7 +23,6 @@ public sealed class CdclSolverTests
         Assert.Equal(3, result.Statistics.UnitPropagations);
     }
 
-    /// <summary>Verifies root-level contradiction handling.</summary>
     [Fact]
     public void Solve_OppositeUnitClauses_ReturnsUnsat()
     {
@@ -34,7 +33,6 @@ public sealed class CdclSolverTests
         Assert.Empty(result.Model);
     }
 
-    /// <summary>Verifies conflict learning and backjumping.</summary>
     [Fact]
     public void Solve_ConflictLearnsAndBackjumps()
     {
@@ -54,12 +52,9 @@ public sealed class CdclSolverTests
         Assert.True(result.Statistics.Backjumps >= 1);
     }
 
-    /// <summary>Verifies alternative implication-graph cuts.</summary>
     [Theory]
-    [InlineData(ConflictAnalysisMethod.FirstUip)]
-    [InlineData(ConflictAnalysisMethod.DecisionLiteral)]
-    [InlineData(ConflictAnalysisMethod.MultipleCuts)]
-    public void Solve_AlternativeConflictCuts_ReturnSat(ConflictAnalysisMethod method)
+    [MemberData(nameof(ConflictAnalyzers))]
+    public void Solve_AlternativeConflictCuts_ReturnSat(IConflictAnalyzer analyzer)
     {
         var formula = Formula(
             4,
@@ -70,14 +65,13 @@ public sealed class CdclSolverTests
             Clause(3, 4));
 
         var result = new CdclSolver(
-            new FirstUnassignedHeuristic(),
-            new CdclSolverOptions { ConflictAnalysis = method }).Solve(formula);
+            decisionHeuristic: new FirstUnassignedHeuristic(),
+            conflictAnalyzer: analyzer).Solve(formula);
 
         Assert.Equal(SolverStatus.SAT, result.Status);
         Assert.True(result.Statistics.LearnedClauses >= 1);
     }
 
-    /// <summary>Verifies learning from multiple implication-graph cuts.</summary>
     [Fact]
     public void Solve_MultipleCuts_LearnsMoreThanOneClause()
     {
@@ -89,16 +83,21 @@ public sealed class CdclSolverTests
             Clause(-3, -4));
 
         var result = new CdclSolver(
-            new FirstUnassignedHeuristic(),
-            new CdclSolverOptions
-            {
-                ConflictAnalysis = ConflictAnalysisMethod.MultipleCuts,
-                Restart = new RestartSettings { Method = RestartMethod.Disabled },
-                ClauseDeletion = new ClauseDeletionSettings { Method = ClauseDeletionMethod.Disabled }
-            }).Solve(formula);
+            decisionHeuristic: new FirstUnassignedHeuristic(),
+            conflictAnalyzer: new MultipleCutsConflictAnalyzer(),
+            restartPolicy: new DisabledRestartPolicy(),
+            clauseDeletionPolicy: new DisabledClauseDeletionPolicy(),
+            deletionSchedule: new LearnedClauseDeletionSchedule(isEnabled: false)).Solve(formula);
 
         Assert.Equal(SolverStatus.SAT, result.Status);
         Assert.True(result.Statistics.LearnedClauses >= 2);
+    }
+
+    public static IEnumerable<object[]> ConflictAnalyzers()
+    {
+        yield return [new FirstUipConflictAnalyzer()];
+        yield return [new DecisionLiteralConflictAnalyzer()];
+        yield return [new MultipleCutsConflictAnalyzer()];
     }
 
     private static SolverResult Solve(CnfFormula formula) =>

@@ -16,30 +16,23 @@ internal sealed class DimacsParser
 
     public CnfFormula Parse()
     {
-        SkipInitialComments();
         ExpectWord("p");
         ExpectWord("cnf");
 
-        var variableCount = ReadNonNegativeInteger("variable count");
+        var varCount = ReadNonNegativeInteger("variable count");
         var clauseCount = ReadNonNegativeInteger("clause count");
-        var clauses = ReadClauses(variableCount, clauseCount);
+        var clauses = ReadClauses(varCount, clauseCount);
 
         ConsumeTrailingInput();
-        return new CnfFormula(variableCount, clauses);
+        return new CnfFormula(varCount, clauses);
     }
 
-    private void SkipInitialComments()
-    {
-        while (_current.Kind == DimacsTokenKind.Comment)
-            Advance();
-    }
-
-    private IReadOnlyList<Clause> ReadClauses(int variableCount, int clauseCount)
+    private IReadOnlyList<Clause> ReadClauses(int varCount, int clauseCount)
     {
         var clauses = new List<Clause>(clauseCount);
-        for (var index = 0; index < clauseCount; index++)
+        for (var idx = 0; idx < clauseCount; idx++)
         {
-            var clause = ReadClause(variableCount);
+            var clause = ReadClause(varCount);
             if (clause is not null)
                 clauses.Add(clause);
         }
@@ -49,9 +42,6 @@ internal sealed class DimacsParser
 
     private void ConsumeTrailingInput()
     {
-        while (_current.Kind == DimacsTokenKind.Comment)
-            Advance();
-
         if (_current.Kind == DimacsTokenKind.EndMarker)
         {
             // SATLIB '%' terminator
@@ -61,57 +51,76 @@ internal sealed class DimacsParser
         Expect(DimacsTokenKind.EndOfInput);
     }
 
-    private Clause? ReadClause(int variableCount)
+    private Clause? ReadClause(int varCount)
     {
-        var literals = new List<Literal>();
-        var values = new HashSet<int>();
-        var isTautology = false;
+        var lits = new List<Literal>();
+        var seen = new HashSet<int>();
+        var hasOpposite = false;
 
         while (true)
         {
-            var token = ReadIntegerToken("a DIMACS literal or 0");
-            var value = ParseInteger(token);
-            if (value == 0)
-                return isTautology ? null : new Clause(literals);
-
-            if (value == int.MinValue || Math.Abs(value) > variableCount)
-                throw Error(token, $"Literal '{value}' is outside the range -{variableCount} to {variableCount}.");
-            if (values.Contains(-value))
+            var val = ReadLiteralValue(varCount);
+            if (val == 0)
             {
-                isTautology = true;
+                if (hasOpposite)
+                    return null;
+
+                return new Clause(lits);
+            }
+
+            if (seen.Contains(-val))
+            {
+                hasOpposite = true;
                 continue;
             }
-            if (!values.Add(value))
+
+            if (!seen.Add(val))
                 continue;
 
-            literals.Add(new Literal(Math.Abs(value), value < 0));
+            lits.Add(new Literal(Math.Abs(val), val < 0));
         }
+    }
+
+    private int ReadLiteralValue(int varCount)
+    {
+        var tok = ReadIntegerToken("a DIMACS literal or 0");
+        var val = ParseInteger(tok);
+        if (val != 0)
+            ValidateLiteralValue(tok, val, varCount);
+
+        return val;
+    }
+
+    private static void ValidateLiteralValue(DimacsToken tok, int val, int varCount)
+    {
+        if (val == int.MinValue || Math.Abs(val) > varCount)
+            throw Error(tok, $"Literal '{val}' is outside the range -{varCount} to {varCount}.");
     }
 
     private int ReadNonNegativeInteger(string description)
     {
-        var token = ReadIntegerToken(description);
-        var value = ParseInteger(token);
-        if (value < 0)
-            throw Error(token, $"Expected a non-negative {description}.");
+        var tok = ReadIntegerToken(description);
+        var val = ParseInteger(tok);
+        if (val < 0)
+            throw Error(tok, $"Expected a non-negative {description}.");
 
-        return value;
+        return val;
     }
 
     private DimacsToken ReadIntegerToken(string expectation) =>
         Expect(DimacsTokenKind.Integer, expectation);
 
-    private static int ParseInteger(DimacsToken token) =>
-        int.Parse(token.Text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+    private static int ParseInteger(DimacsToken tok) =>
+        int.Parse(tok.Text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
 
     private DimacsToken Expect(DimacsTokenKind kind, string? expectation = null)
     {
         if (_current.Kind != kind)
             throw Error($"Expected {expectation ?? Describe(kind)}, found {_current.DisplayName}.");
 
-        var token = _current;
+        var tok = _current;
         Advance();
-        return token;
+        return tok;
     }
 
     private void ExpectWord(string word)
@@ -127,8 +136,8 @@ internal sealed class DimacsParser
     private FormatException Error(string message) =>
         new($"Line {_current.Line}, column {_current.Column}: {message}");
 
-    private static FormatException Error(DimacsToken token, string message) =>
-        new($"Line {token.Line}, column {token.Column}: {message}");
+    private static FormatException Error(DimacsToken tok, string message) =>
+        new($"Line {tok.Line}, column {tok.Column}: {message}");
 
     private static string Describe(DimacsTokenKind kind) => kind switch
     {

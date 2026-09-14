@@ -7,23 +7,19 @@ using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Core.Solving.Dpll;
 
-/// <summary>DPLL solver with chronological backtracking.</summary>
 public sealed class DpllSolver : ISolver
 {
     private readonly IDecisionHeuristic _decisionHeuristic;
     private readonly IPropagationEngine _propagator;
 
-    /// <summary>Creates a DPLL solver.</summary>
-    /// <param name="decisionHeuristic">Branching strategy.</param>
-    /// <param name="propagationMethod">Propagation structure.</param>
     public DpllSolver(
         IDecisionHeuristic decisionHeuristic,
-        PropagationMethod propagationMethod = PropagationMethod.AdjacencyLists)
+        IPropagationEngine? propagator = null)
     {
         ArgumentNullException.ThrowIfNull(decisionHeuristic);
 
         _decisionHeuristic = decisionHeuristic;
-        _propagator = PropagationEngineFactory.Create(propagationMethod);
+        _propagator = propagator ?? new AdjacencyListPropagator();
     }
 
     public SolverResult Solve(CnfFormula formula)
@@ -31,7 +27,8 @@ public sealed class DpllSolver : ISolver
         ArgumentNullException.ThrowIfNull(formula);
 
         _decisionHeuristic.Initialize(formula);
-        _propagator.Initialize(new ClauseDatabase(formula));
+        var clauses = new ClauseDatabase(formula);
+        _propagator.Initialize(clauses);
         var state = new SolverState(formula);
         var statistics = new SearchStatistics();
         using var process = Process.GetCurrentProcess();
@@ -39,11 +36,8 @@ public sealed class DpllSolver : ISolver
 
         var isSatisfiable = Search(state, statistics);
         var cpuTime = process.TotalProcessorTime - cpuTimeBefore;
-        var resultStatistics = statistics.Create(cpuTime);
 
-        return isSatisfiable
-            ? new SolverResult(SolverStatus.SAT, state.CreateModel(), resultStatistics)
-            : new SolverResult(SolverStatus.UNSAT, Array.Empty<Literal>(), resultStatistics);
+        return CreateResult(isSatisfiable, state, statistics, cpuTime);
     }
 
     private bool Search(SolverState state, SearchStatistics statistics)
@@ -51,26 +45,43 @@ public sealed class DpllSolver : ISolver
         if (_propagator.Propagate(state, statistics).HasConflict)
             return false;
 
-        var decisionLiteral = _decisionHeuristic.ChooseLiteral(state);
-        if (!decisionLiteral.HasValue)
+        var decision = _decisionHeuristic.ChooseLiteral(state);
+        if (!decision.HasValue)
             return true;
 
-        var checkpoint = state.CreateCheckpoint();
-        if (TryBranch(decisionLiteral.Value, state, statistics))
+        var level = state.CurrentDecisionLevel;
+        if (TryBranch(decision.Value, state, statistics))
             return true;
 
-        // Same propagated prefix
-        state.Restore(checkpoint);
-        if (TryBranch(decisionLiteral.Value.Negate(), state, statistics))
+        // Negated branch from the same propagated prefix
+        state.BacktrackTo(level);
+        if (TryBranch(decision.Value.Negate(), state, statistics))
             return true;
 
-        state.Restore(checkpoint);
+        state.BacktrackTo(level);
         return false;
     }
 
-    private bool TryBranch(Literal decision, SolverState state, SearchStatistics statistics)
+    private bool TryBranch(
+        Literal decision,
+        SolverState state,
+        SearchStatistics statistics)
     {
+        state.BeginDecisionLevel();
         statistics.RecordDecision();
-        return state.TryAssign(decision) && Search(state, statistics);
+        return state.Enqueue(decision, reason: null) && Search(state, statistics);
+    }
+
+    private static SolverResult CreateResult(
+        bool isSatisfiable,
+        SolverState state,
+        SearchStatistics statistics,
+        TimeSpan cpuTime)
+    {
+        var resultStatistics = statistics.Create(cpuTime);
+
+        return isSatisfiable
+            ? new SolverResult(SolverStatus.SAT, state.CreateModel(), resultStatistics)
+            : new SolverResult(SolverStatus.UNSAT, Array.Empty<Literal>(), resultStatistics);
     }
 }

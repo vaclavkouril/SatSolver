@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using SatSolver.Core.Cnf;
 using SatSolver.Core.Solving.Cdcl.Analysis;
-using SatSolver.Core.Solving.Cdcl.Configuration;
 using SatSolver.Core.Solving.Cdcl.Deletion;
 using SatSolver.Core.Solving.Cdcl.Minimization;
 using SatSolver.Core.Solving.Cdcl.Restarts;
@@ -12,158 +11,203 @@ using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Core.Solving.Cdcl;
 
-/// <summary>One CDCL search run.</summary>
-internal sealed class CdclRun(
-    IDecisionHeuristic decisionHeuristic,
-    CdclSolverOptions options)
+internal sealed class CdclRun
 {
-    private readonly IDecisionHeuristic _decisionHeuristic = decisionHeuristic;
-    private readonly CdclSolverOptions _options = options;
+    private readonly IDecisionHeuristic _heuristic;
+    private readonly IConflictAwareDecisionHeuristic? _conflictHeuristic;
+    private readonly ClauseDatabase _clauses;
+    private readonly SolverState _state;
+    private readonly SearchStatistics _statistics = new();
+    private readonly IPropagationEngine _propagator;
+    private readonly IConflictAnalyzer _analyzer;
+    private readonly ILearnedClauseMinimizer _minimizer;
+    private readonly IRestartPolicy _restart;
+    private readonly IClauseDeletionPolicy _deletion;
+    private readonly LearnedClauseDeletionSchedule _schedule;
+    private int _conflicts;
 
-    public SolverResult Solve(CnfFormula formula)
-    {
-        _decisionHeuristic.Initialize(formula);
-
-        var clauses = new ClauseDatabase(formula);
-        var propagator = PropagationEngineFactory.Create(_options.Propagation);
-        var analyzer = ConflictAnalyzerFactory.Create(_options.ConflictAnalysis);
-        var minimizer = LearnedClauseMinimizerFactory.Create(_options.Minimization);
-        var restartPolicy = RestartPolicyFactory.Create(_options.Restart);
-        var deletionPolicy = ClauseDeletionPolicyFactory.Create(_options.ClauseDeletion);
-        var deletionSchedule = new LearnedClauseDeletionSchedule(_options.ClauseDeletion);
-        var state = new SolverState(formula);
-        var statistics = new SearchStatistics();
-
-        propagator.Initialize(clauses);
-
-        using var process = Process.GetCurrentProcess();
-        var cpuTimeBefore = process.TotalProcessorTime;
-        var isSatisfiable = Search(
-            state,
-            clauses,
-            propagator,
-            analyzer,
-            minimizer,
-            restartPolicy,
-            deletionPolicy,
-            deletionSchedule,
-            statistics);
-        var cpuTime = process.TotalProcessorTime - cpuTimeBefore;
-
-        return isSatisfiable
-            ? new SolverResult(SolverStatus.SAT, state.CreateModel(), statistics.Create(cpuTime))
-            : new SolverResult(SolverStatus.UNSAT, [], statistics.Create(cpuTime));
-    }
-
-    private bool Search(
-        SolverState state,
-        ClauseDatabase clauses,
+    public CdclRun(
+        CnfFormula formula,
+        IDecisionHeuristic heuristic,
         IPropagationEngine propagator,
         IConflictAnalyzer analyzer,
         ILearnedClauseMinimizer minimizer,
-        IRestartPolicy restartPolicy,
-        IClauseDeletionPolicy deletionPolicy,
-        LearnedClauseDeletionSchedule deletionSchedule,
-        SearchStatistics statistics)
+        IRestartPolicy restart,
+        IClauseDeletionPolicy deletion,
+        LearnedClauseDeletionSchedule schedule)
     {
-        var conflictsSinceRestart = 0;
+        ArgumentNullException.ThrowIfNull(formula);
+        ArgumentNullException.ThrowIfNull(heuristic);
+        ArgumentNullException.ThrowIfNull(propagator);
+        ArgumentNullException.ThrowIfNull(analyzer);
+        ArgumentNullException.ThrowIfNull(minimizer);
+        ArgumentNullException.ThrowIfNull(restart);
+        ArgumentNullException.ThrowIfNull(deletion);
+        ArgumentNullException.ThrowIfNull(schedule);
 
+        _heuristic = heuristic;
+        _conflictHeuristic = heuristic as IConflictAwareDecisionHeuristic;
+        _clauses = new ClauseDatabase(formula);
+        _state = new SolverState(formula);
+        _propagator = propagator;
+        _analyzer = analyzer;
+        _minimizer = minimizer;
+        _restart = restart;
+        _deletion = deletion;
+        _schedule = schedule;
+    }
+
+    public SolverResult Solve()
+    {
+        _heuristic.Initialize(_state.Formula);
+        _propagator.Initialize(_clauses);
+        _restart.Reset();
+        _schedule.Reset();
+
+        using var process = Process.GetCurrentProcess();
+        var start = process.TotalProcessorTime;
+        var isSat = Search();
+        var cpuTime = process.TotalProcessorTime - start;
+
+        return isSat
+            ? new SolverResult(SolverStatus.SAT, _state.CreateModel(), _statistics.Create(cpuTime))
+            : new SolverResult(SolverStatus.UNSAT, [], _statistics.Create(cpuTime));
+    }
+
+    private bool Search()
+    {
         while (true)
         {
-            var propagation = propagator.Propagate(state, statistics);
-
+            var propagation = _propagator.Propagate(_state, _statistics);
             if (propagation.HasConflict)
             {
-                statistics.RecordConflict();
-                conflictsSinceRestart++;
-
-                if (state.CurrentDecisionLevel == 0)
+                if (!HandleConflict(propagation.ConflictClause!.Value))
                     return false;
 
-                var conflict = propagation.ConflictClause!.Value;
-                var conflictClause = clauses.Get(conflict);
-                if (conflictClause.IsLearned)
-                    conflictClause.BumpActivity();
-
-                var analysis = analyzer.Analyze(conflict, state, clauses);
-                var assertingClause = minimizer.Minimize(analysis.AssertingClause, state, clauses);
-                var assertionLevel = GetAssertionLevel(assertingClause, state);
-                var assertingReference = AddLearnedClause(assertingClause, clauses, propagator, statistics);
-
-                foreach (var clause in analysis.AdditionalClauses)
-                    AddLearnedClause(minimizer.Minimize(clause, state, clauses), clauses, propagator, statistics);
-
-                state.BacktrackTo(assertionLevel);
-                statistics.RecordBackjump();
-
-                // Asserting clause; unit after backjump
-                if (!state.Enqueue(assertingClause.Literals[0], assertingReference))
-                    throw new InvalidOperationException("The asserting learned clause is not unit.");
-
-                clauses.Get(assertingReference).BumpActivity();
-                statistics.RecordUnitPropagations(1);
-
-                if (restartPolicy.ShouldRestart(conflictsSinceRestart))
-                {
-                    state.BacktrackTo(0);
-                    restartPolicy.OnRestart();
-                    conflictsSinceRestart = 0;
-                    statistics.RecordRestart();
-                }
-
-                DeleteLearnedClauses(clauses, state, deletionPolicy, deletionSchedule, statistics);
                 continue;
             }
 
-            var decision = _decisionHeuristic.ChooseLiteral(state);
-            if (!decision.HasValue)
+            if (!MakeDecision())
                 return true;
-
-            state.BeginDecisionLevel();
-            state.Enqueue(decision.Value, reason: null);
-            statistics.RecordDecision();
         }
     }
 
-    private static ClauseReference AddLearnedClause(
-        LearnedClause clause,
-        ClauseDatabase clauses,
-        IPropagationEngine propagator,
-        SearchStatistics statistics)
+    private bool HandleConflict(ClauseReference conflict)
     {
-        var reference = clauses.AddLearned(clause);
-        propagator.RegisterClause(reference);
-        statistics.RecordLearnedClause(clause.Literals.Count, clause.Lbd);
-        return reference;
+        _statistics.RecordConflict();
+        _conflicts++;
+
+        if (_state.CurrentDecisionLevel == 0)
+            return false;
+
+        BumpConflictClauseActivity(conflict);
+        LearnAndBackjump(conflict);
+        _conflictHeuristic?.OnConflict();
+        RestartIfNeeded();
+        DeleteLearnedClauses();
+        return true;
     }
 
-    private static void DeleteLearnedClauses(
-        ClauseDatabase clauses,
-        SolverState state,
-        IClauseDeletionPolicy policy,
-        LearnedClauseDeletionSchedule schedule,
-        SearchStatistics statistics)
+    private void BumpConflictClauseActivity(ClauseReference conflict)
     {
-        var learnedClauseCount = clauses.LearnedClauses.Count();
-        if (!schedule.ShouldDelete(learnedClauseCount))
+        var clause = _clauses.Get(conflict);
+        if (clause.IsLearned)
+            clause.BumpActivity();
+    }
+
+    private void LearnAndBackjump(ClauseReference conflict)
+    {
+        var analysis = _analyzer.Analyze(conflict, _state, _clauses);
+        var asserting = _minimizer.Minimize(
+            analysis.AssertingClause,
+            _state,
+            _clauses);
+        var level = GetAssertionLevel(asserting);
+        var clauseRef = AddLearnedClause(asserting);
+
+        AddAdditionalClauses(analysis.AdditionalClauses);
+
+        _state.BacktrackTo(level);
+        _statistics.RecordBackjump();
+        EnqueueAssertingLiteral(asserting, clauseRef);
+    }
+
+    private void AddAdditionalClauses(IReadOnlyList<LearnedClause> moreClauses)
+    {
+        foreach (var clause in moreClauses)
+        {
+            var minimizedClause = _minimizer.Minimize(clause, _state, _clauses);
+            AddLearnedClause(minimizedClause);
+        }
+    }
+
+    private void EnqueueAssertingLiteral(LearnedClause clause, ClauseReference clauseRef)
+    {
+        if (!_state.Enqueue(clause.Literals[0], clauseRef))
+            throw new InvalidOperationException("The asserting learned clause is not unit.");
+
+        _clauses.Get(clauseRef).BumpActivity();
+        _statistics.RecordUnitPropagations(1);
+    }
+
+    private void RestartIfNeeded()
+    {
+        if (!_restart.ShouldRestart(_conflicts))
             return;
 
-        var deleted = policy.SelectForDeletion(clauses.LearnedClauses, state.GetLockedClauses());
-
-        foreach (var clause in deleted)
-        {
-            clauses.DeleteLearned(clause);
-            statistics.RecordDeletedLearnedClause();
-        }
-
-        schedule.OnDeletionRound();
+        _state.BacktrackTo(0);
+        _restart.OnRestart();
+        _conflicts = 0;
+        _statistics.RecordRestart();
     }
 
-    private static int GetAssertionLevel(LearnedClause clause, SolverState state) =>
-        clause.Literals
-            .Skip(1)
-            .Select(literal => state.GetDecisionLevel(literal.Variable))
-            .DefaultIfEmpty(0)
-            .Max();
+    private bool MakeDecision()
+    {
+        var decision = _heuristic.ChooseLiteral(_state);
+        if (!decision.HasValue)
+            return false;
 
+        _state.BeginDecisionLevel();
+        _state.Enqueue(decision.Value, reason: null);
+        _statistics.RecordDecision();
+        return true;
+    }
+
+    private ClauseReference AddLearnedClause(LearnedClause clause)
+    {
+        var clauseRef = _clauses.AddLearned(clause);
+        _propagator.RegisterClause(clauseRef);
+        _conflictHeuristic?.OnLearnedClause(clause.Literals);
+        _statistics.RecordLearnedClause(clause.Literals.Count, clause.Lbd);
+        return clauseRef;
+    }
+
+    private void DeleteLearnedClauses()
+    {
+        var learned = _clauses.LearnedClauses.ToArray();
+        if (!_schedule.ShouldDelete(learned.Length))
+            return;
+
+        var toDelete = _deletion.SelectForDeletion(
+            learned,
+            _state.GetLockedClauses());
+
+        foreach (var clauseRef in toDelete)
+        {
+            _clauses.DeleteLearned(clauseRef);
+            _statistics.RecordDeletedLearnedClause();
+        }
+
+        _schedule.OnDeletionRound();
+    }
+
+    private int GetAssertionLevel(LearnedClause clause)
+    {
+        var level = 0;
+
+        for (var idx = 1; idx < clause.Literals.Count; idx++)
+            level = Math.Max(level, _state.GetDecisionLevel(clause.Literals[idx].Variable));
+
+        return level;
+    }
 }

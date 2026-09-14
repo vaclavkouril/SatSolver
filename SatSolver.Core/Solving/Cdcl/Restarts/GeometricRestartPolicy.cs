@@ -1,19 +1,22 @@
 namespace SatSolver.Core.Solving.Cdcl.Restarts;
 
-/// <summary>Restart policy with geometrically growing conflict intervals.</summary>
-internal sealed class GeometricRestartPolicy : IRestartPolicy
+public sealed class GeometricRestartPolicy : IRestartPolicy
 {
+    private readonly int _initialConflictLimit;
     private readonly double _growthFactor;
 
-    public GeometricRestartPolicy(int initialConflictLimit, double growthFactor)
+    public GeometricRestartPolicy(
+        int initialConflictLimit = 100,
+        double growthFactor = 1.5)
     {
         if (initialConflictLimit < 1)
             throw new ArgumentOutOfRangeException(nameof(initialConflictLimit));
-        if (double.IsNaN(growthFactor) || double.IsInfinity(growthFactor) || growthFactor <= 1)
+        if (!double.IsFinite(growthFactor) || growthFactor <= 1)
             throw new ArgumentOutOfRangeException(nameof(growthFactor));
 
-        CurrentConflictLimit = initialConflictLimit;
+        _initialConflictLimit = initialConflictLimit;
         _growthFactor = growthFactor;
+        Reset();
     }
 
     public int CurrentConflictLimit { get; private set; }
@@ -28,15 +31,17 @@ internal sealed class GeometricRestartPolicy : IRestartPolicy
 
     public void OnRestart() => CurrentConflictLimit = Grow(CurrentConflictLimit, _growthFactor);
 
+    public void Reset() => CurrentConflictLimit = _initialConflictLimit;
+
     private static int Grow(int currentLimit, double growthFactor)
     {
         if (currentLimit == int.MaxValue)
             return int.MaxValue;
 
-        var grownLimit = Math.Ceiling(currentLimit * growthFactor);
-        if (grownLimit >= int.MaxValue)
+        var next = Math.Ceiling(currentLimit * growthFactor);
+        if (next >= int.MaxValue)
             return int.MaxValue;
 
-        return Math.Max(currentLimit + 1, (int)grownLimit);
+        return Math.Max(currentLimit + 1, (int)next);
     }
 }

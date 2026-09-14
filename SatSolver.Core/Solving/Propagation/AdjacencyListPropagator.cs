@@ -4,11 +4,10 @@ using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Core.Solving.Propagation;
 
-/// <summary>Adjacency-list propagation.</summary>
-internal sealed class AdjacencyListPropagator : IPropagationEngine
+public sealed class AdjacencyListPropagator : IPropagationEngine
 {
     private ClauseDatabase? _clauses;
-    private List<ClauseReference>[]? _clausesByLiteral;
+    private List<ClauseReference>[]? _byLiteral;
     private bool _requiresInitialScan;
 
     public void Initialize(ClauseDatabase clauses)
@@ -16,54 +15,76 @@ internal sealed class AdjacencyListPropagator : IPropagationEngine
         ArgumentNullException.ThrowIfNull(clauses);
 
         _clauses = clauses;
-        _clausesByLiteral = CreateLiteralIndex(clauses.VariableCount);
+        _byLiteral = CreateLiteralIndex(clauses.VariableCount);
+        _requiresInitialScan = true;
 
         foreach (var clause in clauses.ActiveClauses)
             AddClauseToIndex(clause);
-
-        // Initial scan; no trail trigger
-        _requiresInitialScan = true;
     }
 
     public void RegisterClause(ClauseReference clause)
     {
-        var clauses = GetInitializedClauses();
-        AddClauseToIndex(clauses.Get(clause));
+        AddClauseToIndex(Clauses.Get(clause));
     }
 
     public PropagationResult Propagate(SolverState state, SearchStatistics statistics)
     {
-        var clauses = GetInitializedClauses(state);
+        EnsureFormula(state);
+        var result = PropagateInitialClauses(state, statistics);
 
-        if (_requiresInitialScan)
+        return result.HasConflict
+            ? result
+            : PropagateTrail(state, statistics);
+    }
+
+    private PropagationResult PropagateInitialClauses(
+        SolverState state,
+        SearchStatistics statistics)
+    {
+        if (!_requiresInitialScan)
+            return PropagationResult.NoConflict;
+
+        _requiresInitialScan = false;
+        foreach (var clause in Clauses.ActiveClauses)
         {
-            _requiresInitialScan = false;
-
-            foreach (var clause in clauses.ActiveClauses)
-            {
-                var result = EvaluateClause(clause, state, statistics);
-                if (result.HasConflict)
-                    return result;
-            }
-        }
-
-        while (state.TryTakeNextUnpropagatedLiteral(out var assignedLiteral))
-        {
-            var falsifiedLiteral = assignedLiteral.Negate();
-
-            // Clauses that can become unit
-            foreach (var clauseReference in _clausesByLiteral![GetLiteralIndex(falsifiedLiteral)])
-            {
-                var result = EvaluateClause(clauses.Get(clauseReference), state, statistics);
-                if (result.HasConflict)
-                    return result;
-            }
+            var result = EvaluateClause(clause, state, statistics);
+            if (result.HasConflict)
+                return result;
         }
 
         return PropagationResult.NoConflict;
     }
 
-    private PropagationResult EvaluateClause(
+    private PropagationResult PropagateTrail(
+        SolverState state,
+        SearchStatistics statistics)
+    {
+        while (state.TryTakeNextUnpropagatedLiteral(out var assigned))
+        {
+            var result = PropagateFalsifiedLiteral(assigned.Negate(), state, statistics);
+            if (result.HasConflict)
+                return result;
+        }
+
+        return PropagationResult.NoConflict;
+    }
+
+    private PropagationResult PropagateFalsifiedLiteral(
+        Literal falseLiteral,
+        SolverState state,
+        SearchStatistics statistics)
+    {
+        foreach (var clauseRef in ClausesByLiteral[GetLiteralIndex(falseLiteral)])
+        {
+            var result = EvaluateClause(Clauses.Get(clauseRef), state, statistics);
+            if (result.HasConflict)
+                return result;
+        }
+
+        return PropagationResult.NoConflict;
+    }
+
+    private static PropagationResult EvaluateClause(
         SolverClause clause,
         SolverState state,
         SearchStatistics statistics)
@@ -73,26 +94,26 @@ internal sealed class AdjacencyListPropagator : IPropagationEngine
 
         statistics.RecordPropagationClauseCheck();
 
-        Literal? onlyUnassigned = null;
+        Literal? unit = null;
 
-        foreach (var literal in clause.Literals)
+        foreach (var lit in clause.Literals)
         {
-            if (IsSatisfied(literal, state))
+            if (IsSatisfied(lit, state))
                 return PropagationResult.NoConflict;
 
-            if (!state.IsAssigned(literal.Variable))
-            {
-                if (onlyUnassigned.HasValue)
-                    return PropagationResult.NoConflict;
+            if (state.IsAssigned(lit.Variable))
+                continue;
 
-                onlyUnassigned = literal;
-            }
+            if (unit.HasValue)
+                return PropagationResult.NoConflict;
+
+            unit = lit;
         }
 
-        if (!onlyUnassigned.HasValue)
+        if (!unit.HasValue)
             return PropagationResult.Conflict(clause.Reference);
 
-        if (!state.Enqueue(onlyUnassigned.Value, clause.Reference))
+        if (!state.Enqueue(unit.Value, clause.Reference))
             return PropagationResult.Conflict(clause.Reference);
 
         if (clause.IsLearned)
@@ -107,28 +128,35 @@ internal sealed class AdjacencyListPropagator : IPropagationEngine
         if (clause.IsDeleted)
             return;
 
-        foreach (var literal in clause.Literals)
-            _clausesByLiteral![GetLiteralIndex(literal)].Add(clause.Reference);
+        foreach (var lit in clause.Literals)
+            ClausesByLiteral[GetLiteralIndex(lit)].Add(clause.Reference);
     }
 
-    private ClauseDatabase GetInitializedClauses(SolverState? state = null)
+    private void EnsureFormula(SolverState state)
     {
-        if (_clauses is null || _clausesByLiteral is null)
-            throw new InvalidOperationException("The propagator was not initialized.");
-        if (state is not null && !ReferenceEquals(_clauses.Formula, state.Formula))
+        if (!ReferenceEquals(Clauses.Formula, state.Formula))
             throw new InvalidOperationException("The propagator belongs to another formula.");
-
-        return _clauses;
     }
 
-    private static bool IsSatisfied(Literal literal, SolverState state) =>
-        state.GetValue(literal.Variable) == !literal.IsNegated;
+    private ClauseDatabase Clauses => _clauses
+        ?? throw new InvalidOperationException("The propagator is not initialized.");
 
-    private static List<ClauseReference>[] CreateLiteralIndex(int variableCount) =>
-        Enumerable.Range(0, variableCount * 2)
-            .Select(_ => new List<ClauseReference>())
-            .ToArray();
+    private List<ClauseReference>[] ClausesByLiteral => _byLiteral
+        ?? throw new InvalidOperationException("The propagator is not initialized.");
 
-    private static int GetLiteralIndex(Literal literal) =>
-        2 * (literal.Variable - 1) + (literal.IsNegated ? 1 : 0);
+    private static bool IsSatisfied(Literal lit, SolverState state) =>
+        state.GetValue(lit.Variable) == !lit.IsNegated;
+
+    private static List<ClauseReference>[] CreateLiteralIndex(int varCount)
+    {
+        var byLiteral = new List<ClauseReference>[varCount * 2];
+
+        for (var idx = 0; idx < byLiteral.Length; idx++)
+            byLiteral[idx] = [];
+
+        return byLiteral;
+    }
+
+    private static int GetLiteralIndex(Literal lit) =>
+        2 * (lit.Variable - 1) + (lit.IsNegated ? 1 : 0);
 }

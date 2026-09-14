@@ -1,15 +1,12 @@
 using SatSolver.Core.Cnf;
 using SatSolver.Core.Solving.Clauses;
-using SatSolver.Core.Solving.Dpll;
 using SatSolver.Core.Solving.Propagation;
 using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Tests;
 
-/// <summary>Tests adjacency-list propagation.</summary>
 public sealed class AdjacencyListPropagatorTests
 {
-    /// <summary>Verifies a formula without units.</summary>
     [Fact]
     public void Propagate_WithoutUnitClauses_ReturnsNoAssignments()
     {
@@ -20,7 +17,6 @@ public sealed class AdjacencyListPropagatorTests
         Assert.Equal(0, result.UnitPropagations);
     }
 
-    /// <summary>Verifies unit-clause propagation.</summary>
     [Fact]
     public void Propagate_UnitClauseChain_DerivesEveryConsequence()
     {
@@ -31,7 +27,6 @@ public sealed class AdjacencyListPropagatorTests
         Assert.Equal(3, result.UnitPropagations);
     }
 
-    /// <summary>Verifies contradictory unit clauses.</summary>
     [Fact]
     public void Propagate_OppositeUnitClauses_ReportsConflict()
     {
@@ -40,7 +35,6 @@ public sealed class AdjacencyListPropagatorTests
         Assert.True(result.HasConflict);
     }
 
-    /// <summary>Verifies an initial empty-clause conflict.</summary>
     [Fact]
     public void Propagate_EmptyClause_ReportsConflict()
     {
@@ -49,7 +43,6 @@ public sealed class AdjacencyListPropagatorTests
         Assert.True(result.HasConflict);
     }
 
-    /// <summary>Verifies propagation after initial assignments.</summary>
     [Fact]
     public void Propagate_InitialAssignments_DerivesOnlyTheirConsequences()
     {
@@ -60,7 +53,6 @@ public sealed class AdjacencyListPropagatorTests
         Assert.Equal(1, result.UnitPropagations);
     }
 
-    /// <summary>Verifies a decision conflicting with a unit clause.</summary>
     [Fact]
     public void Propagate_InitialAssignmentContradictsUnitClause_ReportsConflict()
     {
@@ -69,7 +61,6 @@ public sealed class AdjacencyListPropagatorTests
         Assert.True(result.HasConflict);
     }
 
-    /// <summary>Verifies that satisfied clauses do not propagate.</summary>
     [Fact]
     public void Propagate_SatisfiedClause_DoesNotCreateAFalseUnitLiteral()
     {
@@ -80,12 +71,30 @@ public sealed class AdjacencyListPropagatorTests
         Assert.Equal(0, result.UnitPropagations);
     }
 
+    [Fact]
+    public void Initialize_NewFormula_RebuildsTheLiteralIndex()
+    {
+        var propagator = new AdjacencyListPropagator();
+
+        var first = Propagate(propagator, Formula(1, Clause(1)));
+        var second = Propagate(propagator, Formula(1, Clause(-1)));
+
+        Assert.Equal([Literal(1)], first.Assignments);
+        Assert.Equal([Literal(-1)], second.Assignments);
+    }
+
     private static PropagationTestResult Propagate(CnfFormula formula, params Literal[] initialAssignments)
+        => Propagate(new AdjacencyListPropagator(), formula, initialAssignments);
+
+    private static PropagationTestResult Propagate(
+        IPropagationEngine propagator,
+        CnfFormula formula,
+        params Literal[] initialAssignments)
     {
         var state = new SolverState(formula);
-        var initialAssignmentConflict = initialAssignments.Any(literal => !state.TryAssign(literal));
+        var initialAssignmentConflict = initialAssignments.Any(literal =>
+            !state.Enqueue(literal, reason: null));
         var statistics = new SearchStatistics();
-        var propagator = new AdjacencyListPropagator();
         propagator.Initialize(new ClauseDatabase(formula));
 
         var propagationResult = initialAssignmentConflict

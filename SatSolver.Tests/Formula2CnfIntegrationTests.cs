@@ -3,10 +3,8 @@ using SatSolver.IO.Dimacs;
 
 namespace SatSolver.Tests;
 
-/// <summary>End-to-end tests for the formula2cnf.</summary>
 public sealed class Formula2CnfIntegrationTests
 {
-    /// <summary>Runs every Task 1 formula through the file-input and file-output invocation.</summary>
     [Theory]
     [MemberData(nameof(TaskOneFormulaNames))]
     public async Task Main_ConvertsTaskOneFileFromTheWorkingDirectory(string formulaName)
@@ -29,7 +27,6 @@ public sealed class Formula2CnfIntegrationTests
         }
     }
 
-    /// <summary>Runs a Task 1 formula through the standard-input and standard-output invocation.</summary>
     [Fact]
     public async Task Main_ConvertsTaskOneFileFromStandardInput()
     {

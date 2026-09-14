@@ -4,13 +4,12 @@ using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Core.Solving.Clauses;
 
-/// <summary>Runtime clause metadata.</summary>
-internal sealed class SolverClause
+public sealed class SolverClause
 {
     private readonly ReadOnlyCollection<Literal> _literals;
 
     internal SolverClause(
-        ClauseReference reference,
+        ClauseReference clauseRef,
         IReadOnlyList<Literal> literals,
         bool isLearned,
         int lbd)
@@ -19,7 +18,7 @@ internal sealed class SolverClause
         if (lbd < 0)
             throw new ArgumentOutOfRangeException(nameof(lbd));
 
-        Reference = reference;
+        Reference = clauseRef;
         _literals = Array.AsReadOnly(literals.ToArray());
         IsLearned = isLearned;
         Lbd = lbd;
@@ -29,19 +28,17 @@ internal sealed class SolverClause
     public IReadOnlyList<Literal> Literals => _literals;
     public bool IsLearned { get; }
     public bool IsDeleted { get; private set; }
-    public int Lbd { get; private set; }
+    public int Lbd { get; }
     public double Activity { get; private set; }
 
-    /// <summary>Increases clause activity.</summary>
     internal void BumpActivity(double amount = 1)
     {
-        if (amount <= 0 || double.IsNaN(amount) || double.IsInfinity(amount))
+        if (amount <= 0 || !double.IsFinite(amount))
             throw new ArgumentOutOfRangeException(nameof(amount));
 
         Activity += amount;
     }
 
-    /// <summary>Marks a learned clause as logically deleted.</summary>
     internal void MarkDeleted()
     {
         if (!IsLearned)

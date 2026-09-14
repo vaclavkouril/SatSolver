@@ -1,21 +1,27 @@
-using SatSolver.Core.Solving.Cdcl.Configuration;
-
 namespace SatSolver.Core.Solving.Cdcl.Deletion;
 
-/// <summary>Tracks the learned-clause cache limit between deletion rounds.</summary>
-internal sealed class LearnedClauseDeletionSchedule
+public sealed class LearnedClauseDeletionSchedule
 {
     private readonly bool _isEnabled;
+    private readonly int _initialLearnedClauseLimit;
     private readonly double _growthFactor;
 
-    public LearnedClauseDeletionSchedule(ClauseDeletionSettings settings)
+    public LearnedClauseDeletionSchedule(
+        int initialLearnedClauseLimit = 2_000,
+        double growthFactor = 1.5,
+        bool isEnabled = true)
     {
-        ArgumentNullException.ThrowIfNull(settings);
-        settings.Validate();
+        if (isEnabled && initialLearnedClauseLimit < 1)
+            throw new ArgumentOutOfRangeException(nameof(initialLearnedClauseLimit));
+        if (isEnabled && (!double.IsFinite(growthFactor) || growthFactor <= 1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(growthFactor));
+        }
 
-        _isEnabled = settings.Method != ClauseDeletionMethod.Disabled;
-        CurrentLimit = _isEnabled ? settings.InitialLearnedClauseLimit : int.MaxValue;
-        _growthFactor = settings.LimitGrowthFactor;
+        _isEnabled = isEnabled;
+        _initialLearnedClauseLimit = initialLearnedClauseLimit;
+        _growthFactor = growthFactor;
+        Reset();
     }
 
     public int CurrentLimit { get; private set; }
@@ -34,15 +40,17 @@ internal sealed class LearnedClauseDeletionSchedule
             CurrentLimit = Grow(CurrentLimit, _growthFactor);
     }
 
+    public void Reset() => CurrentLimit = _isEnabled ? _initialLearnedClauseLimit : int.MaxValue;
+
     private static int Grow(int currentLimit, double growthFactor)
     {
         if (currentLimit == int.MaxValue)
             return int.MaxValue;
 
-        var grownLimit = Math.Ceiling(currentLimit * growthFactor);
-        if (grownLimit >= int.MaxValue)
+        var next = Math.Ceiling(currentLimit * growthFactor);
+        if (next >= int.MaxValue)
             return int.MaxValue;
 
-        return Math.Max(currentLimit + 1, (int)grownLimit);
+        return Math.Max(currentLimit + 1, (int)next);
     }
 }

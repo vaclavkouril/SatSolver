@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.CommandLine.Parsing;
 using SatSolver.Core.Cnf;
 using SatSolver.Core.Encoding;
+using SatSolver.Core.Solving.Contracts;
 using SatSolver.Core.Solving.Dpll;
 using SatSolver.Core.Solving.Heuristics;
 using SatSolver.Core.Solving.Propagation;
@@ -16,13 +17,25 @@ internal static class Program
 
     private static RootCommand CreateCommand()
     {
-        var propagationOption = new Option<string>("--propagation")
+        var propagation = new Option<string>("--propagation")
         {
             Description = "Unit-propagation structure: adjacency or watched.",
             DefaultValueFactory = _ => "adjacency",
             CustomParser = ParsePropagation
         };
-        var inputArgument = new Argument<FileInfo?>("input")
+        var heuristic = new Option<string>("--heuristic")
+        {
+            Description = "Decision heuristic: first, random, or jw.",
+            HelpName = "first|random|jw",
+            DefaultValueFactory = _ => "first",
+            CustomParser = ParseHeuristic
+        };
+        var seed = new Option<int>("--seed")
+        {
+            Description = "Seed used only by the random heuristic.",
+            DefaultValueFactory = _ => 0
+        };
+        var input = new Argument<FileInfo?>("input")
         {
             Description = "DIMACS (.cnf) or simplified SMT-LIB (.sat) input file.",
             Arity = ArgumentArity.ZeroOrOne
@@ -30,37 +43,43 @@ internal static class Program
 
         var command = new RootCommand("DPLL SAT solver.")
         {
-            propagationOption,
-            inputArgument
+            propagation,
+            heuristic,
+            seed,
+            input
         };
 
-        command.SetAction(parseResult => Execute(
-            ToPropagationMethod(parseResult.GetValue(propagationOption)!),
-            parseResult.GetValue(inputArgument)));
+        command.SetAction(result => Run(
+            result.GetValue(propagation)
+            ?? throw new InvalidOperationException("Missing --propagation value."),
+            result.GetValue(heuristic)
+            ?? throw new InvalidOperationException("Missing --heuristic value."),
+            result.GetValue(seed),
+            result.GetValue(input)));
 
         return command;
     }
 
-    private static int Execute(PropagationMethod propagationMethod, FileInfo? inputFile)
+    private static int Run(string propagation, string heuristic, int seed, FileInfo? file)
     {
         try
         {
-            using var input = inputFile is null ? Console.In : inputFile.OpenText();
-            var formula = ReadFormula(input, inputFile?.FullName);
-            var result = new DpllSolver(new FirstUnassignedHeuristic(), propagationMethod).Solve(formula);
+            using var input = file is null ? Console.In : file.OpenText();
+            var cnf = ReadCnf(input, file?.FullName);
+            var solver = new DpllSolver(CreateHeuristic(heuristic, seed), CreatePropagator(propagation));
 
-            SolverResultWriter.Write(result, Console.Out);
+            SolverResultWriter.Write(solver.Solve(cnf), Console.Out);
             return 0;
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
                                          FormatException or ArgumentException or NotSupportedException)
         {
-            Console.Error.WriteLine(exception.Message);
+            Console.Error.WriteLine(ex.Message);
             return 2;
         }
     }
 
-    private static CnfFormula ReadFormula(TextReader input, string? inputPath) =>
+    private static CnfFormula ReadCnf(TextReader input, string? inputPath) =>
         Path.GetExtension(inputPath ?? ".cnf").ToLowerInvariant() switch
         {
             ".cnf" => new DimacsReader().Read(input),
@@ -68,25 +87,45 @@ internal static class Program
             _ => throw new ArgumentException("Expected a .cnf or .sat input file.")
         };
 
-    private static string ParsePropagation(ArgumentResult result)
+    private static string ParsePropagation(ArgumentResult result) =>
+        ParseChoice(result, "Expected 'adjacency' or 'watched' after --propagation.", "adjacency", "watched");
+
+    private static string ParseHeuristic(ArgumentResult result)
+    {
+        if (result.Tokens.Count == 1 && result.Tokens[0].Value.Equals("vsids", StringComparison.OrdinalIgnoreCase))
+        {
+            result.AddError("The 'vsids' heuristic is available only in cdcl.");
+            return string.Empty;
+        }
+
+        return ParseChoice(result, "Expected 'first', 'random', or 'jw' after --heuristic.", "first", "random", "jw");
+    }
+
+    private static string ParseChoice(ArgumentResult result, string error, params string[] values)
     {
         if (result.Tokens.Count == 1)
         {
             var value = result.Tokens[0].Value.ToLowerInvariant();
-            switch (value)
-            {
-                case "adjacency":
-                case "watched":
-                    return value;
-            }
+            if (values.Contains(value))
+                return value;
         }
 
-        result.AddError("Expected 'adjacency' or 'watched' after --propagation.");
+        result.AddError(error);
         return string.Empty;
     }
 
-    private static PropagationMethod ToPropagationMethod(string value) =>
-        value == "adjacency"
-            ? PropagationMethod.AdjacencyLists
-            : PropagationMethod.WatchedLiterals;
+    private static IDecisionHeuristic CreateHeuristic(string name, int seed) => name switch
+    {
+        "first" => new FirstUnassignedHeuristic(),
+        "random" => new RandomDecisionHeuristic(seed),
+        "jw" => new StaticJeroslowWangDecisionHeuristic(),
+        _ => throw new ArgumentOutOfRangeException(nameof(name))
+    };
+
+    private static IPropagationEngine CreatePropagator(string name) => name switch
+    {
+        "adjacency" => new AdjacencyListPropagator(),
+        "watched" => new WatchedLiteralPropagator(),
+        _ => throw new ArgumentOutOfRangeException(nameof(name))
+    };
 }

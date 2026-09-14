@@ -31,35 +31,60 @@ internal sealed class FormulaParser
     private FormulaNode ParseCompoundFormula()
     {
         Expect(FormulaTokenKind.LeftParenthesis);
-        var operation = Expect(FormulaTokenKind.Identifier).Text;
-        FormulaNode formula = operation switch
-        {
-            "and" => new And(ParseFormula(), ParseFormula()),
-            "or" => new Or(ParseFormula(), ParseFormula()),
-            "not" => new Not(ParseVariable()),
-            _ => throw Error($"Unknown operation '{operation}'.")
-        };
+        var op = Expect(FormulaTokenKind.Identifier);
+        var node = ParseOperation(op);
 
         Expect(FormulaTokenKind.RightParenthesis);
-        return formula;
+        return node;
     }
 
-    private Variable ParseVariable() => new(Expect(FormulaTokenKind.Identifier).Text);
-
-    private FormulaToken Expect(FormulaTokenKind expectedKind)
+    private FormulaNode ParseOperation(FormulaToken op) => op.Text switch
     {
-        if (_current.Kind != expectedKind)
-            throw Error($"Expected {Describe(expectedKind)}, found {_current.DisplayName}.");
+        "and" => ParseAnd(),
+        "or" => ParseOr(),
+        "not" => ParseNot(),
+        _ => throw Error(op, $"Unknown operation '{op.Text}'.")
+    };
 
-        var token = _current;
+    private And ParseAnd()
+    {
+        var left = ParseFormula();
+        var right = ParseFormula();
+        return new And(left, right);
+    }
+
+    private Or ParseOr()
+    {
+        var left = ParseFormula();
+        var right = ParseFormula();
+        return new Or(left, right);
+    }
+
+    private Not ParseNot() => new(ParseVariable());
+
+    private Variable ParseVariable()
+    {
+        var name = Expect(FormulaTokenKind.Identifier).Text;
+        return new Variable(name);
+    }
+
+    private FormulaToken Expect(FormulaTokenKind kind)
+    {
+        if (_current.Kind != kind)
+            throw Error($"Expected {Describe(kind)}, found {_current.DisplayName}.");
+
+        var tok = _current;
         Advance();
-        return token;
+        return tok;
     }
 
     private void Advance() => _current = _lexer.NextToken();
 
     private FormatException Error(string message) =>
         new($"Line {_current.Line}, column {_current.Column}: {message}");
+
+    private static FormatException Error(FormulaToken tok, string message) =>
+        new($"Line {tok.Line}, column {tok.Column}: {message}");
 
     private static string Describe(FormulaTokenKind kind) => kind switch
     {

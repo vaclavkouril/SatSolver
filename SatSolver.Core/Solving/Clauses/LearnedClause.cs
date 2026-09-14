@@ -3,8 +3,7 @@ using SatSolver.Core.Cnf;
 
 namespace SatSolver.Core.Solving.Clauses;
 
-/// <summary>Conflict-analysis output.</summary>
-internal sealed class LearnedClause
+public sealed class LearnedClause
 {
     private readonly ReadOnlyCollection<Literal> _literals;
 

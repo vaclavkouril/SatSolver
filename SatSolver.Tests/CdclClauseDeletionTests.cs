@@ -1,15 +1,12 @@
 using SatSolver.Core.Cnf;
-using SatSolver.Core.Solving.Cdcl.Configuration;
 using SatSolver.Core.Solving.Cdcl.Deletion;
 using SatSolver.Core.Solving.Clauses;
 using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Tests;
 
-/// <summary>Tests learned-clause deletion.</summary>
 public sealed class CdclClauseDeletionTests
 {
-    /// <summary>Verifies LBD and activity ranking.</summary>
     [Fact]
     public void LbdThenActivityPolicy_SelectsWorstEligibleClauses()
     {
@@ -26,12 +23,9 @@ public sealed class CdclClauseDeletionTests
         locked.BumpActivity(1);
         clauses.DeleteLearned(deleted.Reference);
 
-        var policy = new LbdThenActivityClauseDeletionPolicy(new ClauseDeletionSettings
-        {
-            Method = ClauseDeletionMethod.LbdThenActivity,
-            PermanentLbdLimit = 2,
-            DeletionFraction = 0.5
-        });
+        var policy = new LbdThenActivityClauseDeletionPolicy(
+            permanentLbdLimit: 2,
+            deletionFraction: 0.5);
 
         var selected = policy.SelectForDeletion(
             clauses.Clauses,
@@ -45,7 +39,6 @@ public sealed class CdclClauseDeletionTests
         Assert.DoesNotContain(deleted.Reference, selected);
     }
 
-    /// <summary>Verifies activity ranking.</summary>
     [Fact]
     public void ActivityPolicy_SelectsLeastActiveClausesFirst()
     {
@@ -57,27 +50,19 @@ public sealed class CdclClauseDeletionTests
         nextActive.BumpActivity(1);
         mostActive.BumpActivity(2);
 
-        var policy = new ActivityClauseDeletionPolicy(new ClauseDeletionSettings
-        {
-            Method = ClauseDeletionMethod.Activity,
-            DeletionFraction = 0.5
-        });
+        var policy = new ActivityClauseDeletionPolicy(deletionFraction: 0.5);
 
         var selected = policy.SelectForDeletion(clauses.LearnedClauses, new HashSet<ClauseReference>());
 
         Assert.Equal([leastActive.Reference, nextActive.Reference], selected);
     }
 
-    /// <summary>Verifies deletion schedule growth.</summary>
     [Fact]
     public void DeletionSchedule_UsesStrictLimitAndGrowsAfterRound()
     {
-        var schedule = new LearnedClauseDeletionSchedule(new ClauseDeletionSettings
-        {
-            Method = ClauseDeletionMethod.Lbd,
-            InitialLearnedClauseLimit = 3,
-            LimitGrowthFactor = 1.5
-        });
+        var schedule = new LearnedClauseDeletionSchedule(
+            initialLearnedClauseLimit: 3,
+            growthFactor: 1.5);
 
         Assert.False(schedule.ShouldDelete(3));
         Assert.True(schedule.ShouldDelete(4));
@@ -89,7 +74,6 @@ public sealed class CdclClauseDeletionTests
         Assert.True(schedule.ShouldDelete(6));
     }
 
-    /// <summary>Verifies disabled deletion.</summary>
     [Fact]
     public void DisabledPolicy_SelectsNoClauses()
     {
@@ -102,14 +86,10 @@ public sealed class CdclClauseDeletionTests
         Assert.Empty(selected);
     }
 
-    /// <summary>A disabled schedule never starts a deletion round.</summary>
     [Fact]
     public void DisabledSchedule_NeverRequestsDeletion()
     {
-        var schedule = new LearnedClauseDeletionSchedule(new ClauseDeletionSettings
-        {
-            Method = ClauseDeletionMethod.Disabled
-        });
+        var schedule = new LearnedClauseDeletionSchedule(isEnabled: false);
 
         Assert.Equal(int.MaxValue, schedule.CurrentLimit);
         Assert.False(schedule.ShouldDelete(int.MaxValue));
@@ -117,6 +97,19 @@ public sealed class CdclClauseDeletionTests
         schedule.OnDeletionRound();
 
         Assert.Equal(int.MaxValue, schedule.CurrentLimit);
+    }
+
+    [Fact]
+    public void DeletionSchedule_ResetRestoresInitialLimit()
+    {
+        var schedule = new LearnedClauseDeletionSchedule(
+            initialLearnedClauseLimit: 3,
+            growthFactor: 2);
+
+        schedule.OnDeletionRound();
+        schedule.Reset();
+
+        Assert.Equal(3, schedule.CurrentLimit);
     }
 
     private static ClauseDatabase CreateDatabase() =>

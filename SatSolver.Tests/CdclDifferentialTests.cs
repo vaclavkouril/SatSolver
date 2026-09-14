@@ -1,16 +1,17 @@
 using SatSolver.Core.Cnf;
 using SatSolver.Core.Solving.Cdcl;
-using SatSolver.Core.Solving.Cdcl.Configuration;
+using SatSolver.Core.Solving.Cdcl.Analysis;
+using SatSolver.Core.Solving.Cdcl.Deletion;
+using SatSolver.Core.Solving.Cdcl.Minimization;
+using SatSolver.Core.Solving.Cdcl.Restarts;
 using SatSolver.Core.Solving.Contracts;
 using SatSolver.Core.Solving.Heuristics;
 using SatSolver.Core.Solving.Propagation;
 
 namespace SatSolver.Tests;
 
-/// <summary>Cross-checks configurable CDCL search.</summary>
 public sealed class CdclDifferentialTests
 {
-    /// <summary>Configured CDCL variants agree with exhaustive search.</summary>
     [Fact]
     public void Solve_SmallFormulas_MatchesExhaustiveSearch()
     {
@@ -18,46 +19,37 @@ public sealed class CdclDifferentialTests
         {
             var expectedStatus = IsSatisfiable(formula) ? SolverStatus.SAT : SolverStatus.UNSAT;
 
-            foreach (var options in Configurations())
+            foreach (var solver in Solvers())
             {
-                var result = new CdclSolver(new FirstUnassignedHeuristic(), options).Solve(formula);
+                var result = solver.Solve(formula);
 
                 Assert.Equal(expectedStatus, result.Status);
             }
         }
     }
 
-    /// <summary>Aggressive restarts and deletion preserve satisfiability.</summary>
     [Fact]
     public void Solve_AggressiveMaintenance_MatchesExhaustiveSearch()
     {
-        var options = new CdclSolverOptions
-        {
-            Propagation = PropagationMethod.WatchedLiterals,
-            ConflictAnalysis = ConflictAnalysisMethod.FirstUip,
-            Minimization = ClauseMinimizationMethod.RecursiveReasons,
-            Restart = new RestartSettings
-            {
-                Method = RestartMethod.Geometric,
-                InitialConflictLimit = 1,
-                GrowthFactor = 2
-            },
-            ClauseDeletion = new ClauseDeletionSettings
-            {
-                Method = ClauseDeletionMethod.LbdThenActivity,
-                InitialLearnedClauseLimit = 1,
-                LimitGrowthFactor = 2,
-                PermanentLbdLimit = 0,
-                DeletionFraction = 1
-            }
-        };
+        var solver = new CdclSolver(
+            decisionHeuristic: new FirstUnassignedHeuristic(),
+            propagator: new WatchedLiteralPropagator(),
+            conflictAnalyzer: new FirstUipConflictAnalyzer(),
+            minimizer: new RecursiveReasonLearnedClauseMinimizer(),
+            restartPolicy: new GeometricRestartPolicy(initialConflictLimit: 1, growthFactor: 2),
+            clauseDeletionPolicy: new LbdThenActivityClauseDeletionPolicy(
+                permanentLbdLimit: 0,
+                deletionFraction: 1),
+            deletionSchedule: new LearnedClauseDeletionSchedule(
+                initialLearnedClauseLimit: 1,
+                growthFactor: 2));
 
         var results = new List<SolverResult>();
 
         foreach (var formula in SmallFormulas())
         {
             var expectedStatus = IsSatisfiable(formula) ? SolverStatus.SAT : SolverStatus.UNSAT;
-            var result = new CdclSolver(new FirstUnassignedHeuristic(), options).Solve(formula);
+            var result = solver.Solve(formula);
 
             Assert.Equal(expectedStatus, result.Status);
             results.Add(result);
@@ -66,25 +58,45 @@ public sealed class CdclDifferentialTests
         Assert.Contains(results, result => result.Statistics.Restarts > 0);
     }
 
-    private static IEnumerable<CdclSolverOptions> Configurations()
+    private static IEnumerable<CdclSolver> Solvers()
     {
-        foreach (var propagation in Enum.GetValues<PropagationMethod>())
+        foreach (var propagator in Propagators())
         {
-            foreach (var analysis in Enum.GetValues<ConflictAnalysisMethod>())
+            foreach (var analyzer in ConflictAnalyzers())
             {
-                foreach (var minimization in Enum.GetValues<ClauseMinimizationMethod>())
+                foreach (var minimizer in Minimizers())
                 {
-                    yield return new CdclSolverOptions
-                    {
-                        Propagation = propagation,
-                        ConflictAnalysis = analysis,
-                        Minimization = minimization,
-                        Restart = new RestartSettings { Method = RestartMethod.Disabled },
-                        ClauseDeletion = new ClauseDeletionSettings { Method = ClauseDeletionMethod.Disabled }
-                    };
+                    yield return new CdclSolver(
+                        decisionHeuristic: new FirstUnassignedHeuristic(),
+                        propagator: propagator,
+                        conflictAnalyzer: analyzer,
+                        minimizer: minimizer,
+                        restartPolicy: new DisabledRestartPolicy(),
+                        clauseDeletionPolicy: new DisabledClauseDeletionPolicy(),
+                        deletionSchedule: new LearnedClauseDeletionSchedule(isEnabled: false));
                 }
             }
         }
+    }
+
+    private static IEnumerable<IPropagationEngine> Propagators()
+    {
+        yield return new AdjacencyListPropagator();
+        yield return new WatchedLiteralPropagator();
+    }
+
+    private static IEnumerable<IConflictAnalyzer> ConflictAnalyzers()
+    {
+        yield return new FirstUipConflictAnalyzer();
+        yield return new DecisionLiteralConflictAnalyzer();
+        yield return new MultipleCutsConflictAnalyzer();
+    }
+
+    private static IEnumerable<ILearnedClauseMinimizer> Minimizers()
+    {
+        yield return new NoOpLearnedClauseMinimizer();
+        yield return new RecursiveReasonLearnedClauseMinimizer();
+        yield return new SelfSubsumingResolutionMinimizer();
     }
 
     private static IEnumerable<CnfFormula> SmallFormulas()

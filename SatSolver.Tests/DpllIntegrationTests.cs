@@ -2,17 +2,17 @@ using System.Diagnostics;
 
 namespace SatSolver.Tests;
 
-/// <summary>Tests the <c>dpll</c> command-line application.</summary>
 public sealed class DpllIntegrationTests
 {
-    /// <summary>Verifies simplified SMT-LIB input.</summary>
-    [Fact]
-    public async Task Main_SatInput_WritesSatModelAndStatistics()
+    [Theory]
+    [InlineData("adjacency")]
+    [InlineData("watched")]
+    public async Task Main_SatInput_WritesSatModelAndStatistics(string propagation)
     {
         var repositoryRoot = FindRepositoryRoot();
         var inputPath = Path.Combine(repositoryRoot, "task-1", "toy_5.sat");
 
-        var result = await RunDpll(repositoryRoot, "--propagation", "adjacency", inputPath);
+        var result = await RunDpll(repositoryRoot, "--propagation", propagation, inputPath);
 
         Assert.Equal(0, result.ExitCode);
         Assert.StartsWith("SAT" + Environment.NewLine, result.StandardOutput);
@@ -22,7 +22,6 @@ public sealed class DpllIntegrationTests
         Assert.Contains("Unit propagations:", result.StandardOutput);
     }
 
-    /// <summary>Verifies ordered DIMACS models.</summary>
     [Fact]
     public async Task Main_DimacsInput_WritesOrderedModel()
     {
@@ -40,6 +39,41 @@ public sealed class DpllIntegrationTests
         {
             File.Delete(inputPath);
         }
+    }
+
+    [Theory]
+    [InlineData("first")]
+    [InlineData("random")]
+    [InlineData("jw")]
+    public async Task Main_SupportedDecisionHeuristic_WritesSatResult(string heuristic)
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var inputPath = Path.Combine(repositoryRoot, "task-1", "toy_5.sat");
+        var arguments = new List<string> { "--heuristic", heuristic };
+
+        if (heuristic == "random")
+        {
+            arguments.Add("--seed");
+            arguments.Add("17");
+        }
+
+        arguments.Add(inputPath);
+        var result = await RunDpll(repositoryRoot, arguments.ToArray());
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.StartsWith("SAT" + Environment.NewLine, result.StandardOutput);
+    }
+
+    [Fact]
+    public async Task Main_VsidsHeuristic_ReportsThatDpllDoesNotSupportIt()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var inputPath = Path.Combine(repositoryRoot, "task-1", "toy_5.sat");
+
+        var result = await RunDpll(repositoryRoot, "--heuristic", "vsids", inputPath);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("available only in cdcl", $"{result.StandardOutput}{result.StandardError}".ToLowerInvariant());
     }
 
     private static async Task<ProcessResult> RunDpll(string workingDirectory, params string[] arguments)

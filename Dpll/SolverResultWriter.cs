@@ -7,20 +7,24 @@ internal static class SolverResultWriter
 {
     public static void Write(SolverResult result, TextWriter writer)
     {
-        writer.WriteLine(result.Status == SolverStatus.SAT ? "SAT" : "UNSAT");
+        WriteStatus(result.Status, writer);
 
         if (result.Status == SolverStatus.SAT)
-        {
-            writer.Write("v");
-            foreach (var literal in result.Model.OrderBy(literal => literal.Variable))
-            {
-                var value = literal.IsNegated ? -literal.Variable : literal.Variable;
-                writer.Write($" {value}");
-            }
-            writer.WriteLine(" 0");
-        }
+            WriteModel(result.Model, writer);
 
         WriteStatistics(result.Statistics, writer);
+    }
+
+    private static void WriteStatus(SolverStatus status, TextWriter writer) =>
+        writer.WriteLine(status == SolverStatus.SAT ? "SAT" : "UNSAT");
+
+    private static void WriteModel(IReadOnlyList<Literal> model, TextWriter writer)
+    {
+        writer.Write("v");
+        foreach (var literal in model.OrderBy(literal => literal.Variable))
+            writer.Write($" {(literal.IsNegated ? -literal.Variable : literal.Variable)}");
+
+        writer.WriteLine(" 0");
     }
 
     private static void WriteStatistics(SolverStatistics statistics, TextWriter writer)

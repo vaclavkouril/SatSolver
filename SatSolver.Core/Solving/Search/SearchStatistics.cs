@@ -2,8 +2,7 @@ using SatSolver.Core.Solving.Contracts;
 
 namespace SatSolver.Core.Solving.Search;
 
-/// <summary>Per-run statistics collector.</summary>
-internal sealed class SearchStatistics
+public sealed class SearchStatistics
 {
     public int Decisions { get; private set; }
     public int UnitPropagations { get; private set; }

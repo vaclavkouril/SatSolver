@@ -2,10 +2,8 @@ using SatSolver.Core.Solving.Cdcl.Restarts;
 
 namespace SatSolver.Tests;
 
-/// <summary>Tests CDCL restart policies.</summary>
 public sealed class CdclRestartPolicyTests
 {
-    /// <summary>Verifies geometric intervals.</summary>
     [Fact]
     public void GeometricPolicy_GrowsConflictLimitAfterRestart()
     {
@@ -21,7 +19,6 @@ public sealed class CdclRestartPolicyTests
         Assert.True(policy.ShouldRestart(6));
     }
 
-    /// <summary>Verifies Luby intervals.</summary>
     [Fact]
     public void LubyPolicy_FollowsScaledLubyIntervals()
     {
@@ -39,7 +36,6 @@ public sealed class CdclRestartPolicyTests
         Assert.Equal([10, 10, 20, 10, 10, 20, 40], limits);
     }
 
-    /// <summary>Verifies disabled restarts.</summary>
     [Fact]
     public void DisabledPolicy_NeverRequestsRestart()
     {
@@ -50,12 +46,28 @@ public sealed class CdclRestartPolicyTests
         Assert.False(policy.ShouldRestart(int.MaxValue));
     }
 
-    /// <summary>Verifies conflict-count validation.</summary>
     [Fact]
     public void RestartPolicy_NegativeConflictCount_Throws()
     {
         var policy = new GeometricRestartPolicy(initialConflictLimit: 1, growthFactor: 2);
 
         Assert.Throws<ArgumentOutOfRangeException>(() => policy.ShouldRestart(-1));
+    }
+
+    [Fact]
+    public void RestartPolicies_ResetTheirInitialIntervals()
+    {
+        var geometric = new GeometricRestartPolicy(initialConflictLimit: 4, growthFactor: 2);
+        var luby = new LubyRestartPolicy(unitRun: 10);
+
+        geometric.OnRestart();
+        luby.OnRestart();
+        luby.OnRestart();
+
+        geometric.Reset();
+        luby.Reset();
+
+        Assert.Equal(4, geometric.CurrentConflictLimit);
+        Assert.Equal(10, luby.CurrentConflictLimit);
     }
 }

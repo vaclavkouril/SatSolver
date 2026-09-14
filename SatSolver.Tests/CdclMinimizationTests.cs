@@ -1,6 +1,5 @@
 using SatSolver.Core.Cnf;
 using SatSolver.Core.Solving.Cdcl;
-using SatSolver.Core.Solving.Cdcl.Configuration;
 using SatSolver.Core.Solving.Cdcl.Minimization;
 using SatSolver.Core.Solving.Clauses;
 using SatSolver.Core.Solving.Contracts;
@@ -9,10 +8,8 @@ using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Tests;
 
-/// <summary>CDCL learned-clause minimization tests.</summary>
 public sealed class CdclMinimizationTests
 {
-    /// <summary>Recursive reasons remove a literal implied through another antecedent.</summary>
     [Fact]
     public void RecursiveReasons_RemovesTransitivelyImpliedLiteral()
     {
@@ -38,7 +35,6 @@ public sealed class CdclMinimizationTests
         Assert.Equal(1, minimized.Lbd);
     }
 
-    /// <summary>Recursive reasons retain a literal that depends on an external decision.</summary>
     [Fact]
     public void RecursiveReasons_KeepsLiteralWithExternalDecisionReason()
     {
@@ -61,7 +57,6 @@ public sealed class CdclMinimizationTests
         Assert.Equal(source.Literals, minimized.Literals);
     }
 
-    /// <summary>Self-subsuming resolution removes a literal with a subsuming resolvent.</summary>
     [Fact]
     public void SelfSubsumingResolution_RemovesLiteralWhenResolventAddsNothing()
     {
@@ -78,7 +73,6 @@ public sealed class CdclMinimizationTests
         Assert.Equal(1, minimized.Lbd);
     }
 
-    /// <summary>Self-subsuming resolution retains a literal when its resolvent adds a literal.</summary>
     [Fact]
     public void SelfSubsumingResolution_KeepsLiteralWhenResolventAddsLiteral()
     {
@@ -94,12 +88,9 @@ public sealed class CdclMinimizationTests
         Assert.Equal(source.Literals, minimized.Literals);
     }
 
-    /// <summary>All configured minimizers preserve the solver result.</summary>
     [Theory]
-    [InlineData(ClauseMinimizationMethod.None)]
-    [InlineData(ClauseMinimizationMethod.RecursiveReasons)]
-    [InlineData(ClauseMinimizationMethod.SelfSubsumingResolution)]
-    public void Solve_AllMinimizationMethods_ReturnSat(ClauseMinimizationMethod method)
+    [MemberData(nameof(Minimizers))]
+    public void Solve_AllMinimizationMethods_ReturnSat(ILearnedClauseMinimizer minimizer)
     {
         var formula = Formula(
             variableCount: 4,
@@ -110,11 +101,18 @@ public sealed class CdclMinimizationTests
             Clause(3, 4));
 
         var result = new CdclSolver(
-            new FirstUnassignedHeuristic(),
-            new CdclSolverOptions { Minimization = method }).Solve(formula);
+            decisionHeuristic: new FirstUnassignedHeuristic(),
+            minimizer: minimizer).Solve(formula);
 
         Assert.Equal(SolverStatus.SAT, result.Status);
         Assert.True(result.Statistics.LearnedClauses >= 1);
+    }
+
+    public static IEnumerable<object[]> Minimizers()
+    {
+        yield return [new NoOpLearnedClauseMinimizer()];
+        yield return [new RecursiveReasonLearnedClauseMinimizer()];
+        yield return [new SelfSubsumingResolutionMinimizer()];
     }
 
     private static SolverState CreateLevelOneState(CnfFormula formula, params int[] literals)

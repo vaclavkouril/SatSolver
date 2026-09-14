@@ -4,38 +4,33 @@ using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Core.Solving.Propagation;
 
-/// <summary>Lazy watched-literal propagation.</summary>
-internal sealed class WatchedLiteralPropagator : IPropagationEngine
+public sealed class WatchedLiteralPropagator : IPropagationEngine
 {
     private WatchedLiteralDatabase? _watches;
     private bool _requiresInitialUnitPropagation;
 
     public void Initialize(ClauseDatabase clauses)
     {
-        _watches = new WatchedLiteralDatabase(clauses);
+        ArgumentNullException.ThrowIfNull(clauses);
 
-        // Root units; no false-watch event
+        _watches = new WatchedLiteralDatabase(clauses);
         _requiresInitialUnitPropagation = true;
     }
 
     public void RegisterClause(ClauseReference clause) =>
-        GetInitializedWatches().RegisterClause(clause);
+        Watches.RegisterClause(clause);
 
     public PropagationResult Propagate(SolverState state, SearchStatistics statistics)
     {
-        var watches = GetInitializedWatches(state);
-        var initialResult = PropagateInitialUnits(watches, state, statistics);
+        EnsureFormula(state);
+        var result = PropagateInitialUnits(state, statistics);
 
-        if (initialResult.HasConflict)
-            return initialResult;
+        if (result.HasConflict)
+            return result;
 
-        while (state.TryTakeNextUnpropagatedLiteral(out var assignedLiteral))
+        while (state.TryTakeNextUnpropagatedLiteral(out var assigned))
         {
-            var result = PropagateFalsifiedLiteral(
-                watches,
-                assignedLiteral.Negate(),
-                state,
-                statistics);
+            result = PropagateFalsifiedLiteral(assigned.Negate(), state, statistics);
 
             if (result.HasConflict)
                 return result;
@@ -45,7 +40,6 @@ internal sealed class WatchedLiteralPropagator : IPropagationEngine
     }
 
     private PropagationResult PropagateInitialUnits(
-        WatchedLiteralDatabase watches,
         SolverState state,
         SearchStatistics statistics)
     {
@@ -54,174 +48,213 @@ internal sealed class WatchedLiteralPropagator : IPropagationEngine
 
         _requiresInitialUnitPropagation = false;
 
-        if (watches.EmptyClause is { } emptyClause)
+        if (Watches.EmptyClause is { } emptyClause)
         {
             statistics.RecordPropagationClauseCheck();
             return PropagationResult.Conflict(emptyClause);
         }
 
-        foreach (var clauseReference in watches.InitialUnitClauses)
+        foreach (var clauseRef in Watches.InitialUnitClauses)
         {
-            var clause = watches.Clauses.Get(clauseReference);
-            if (clause.IsDeleted)
-                continue;
+            var result = PropagateInitialUnitClause(clauseRef, state, statistics);
 
-            var literal = clause.Literals[0];
-            var wasAssigned = state.IsAssigned(literal.Variable);
-            statistics.RecordPropagationClauseCheck();
-
-            if (!state.Enqueue(literal, clauseReference))
-                return PropagationResult.Conflict(clauseReference);
-
-            if (!wasAssigned)
-            {
-                if (clause.IsLearned)
-                    clause.BumpActivity();
-
-                statistics.RecordUnitPropagations(1);
-            }
+            if (result.HasConflict)
+                return result;
         }
 
         return PropagationResult.NoConflict;
     }
 
-    private static PropagationResult PropagateFalsifiedLiteral(
-        WatchedLiteralDatabase watches,
-        Literal falsifiedLiteral,
+    private PropagationResult PropagateInitialUnitClause(
+        ClauseReference clauseRef,
         SolverState state,
         SearchStatistics statistics)
     {
-        var watchedClauses = watches.GetClausesWatching(falsifiedLiteral);
-
-        for (var index = 0; index < watchedClauses.Count;)
-        {
-            var clauseReference = watchedClauses[index];
-            var update = UpdateClause(watches, clauseReference, falsifiedLiteral, state, statistics);
-
-            if (update.Result.HasConflict)
-                return update.Result;
-
-            if (update.RemoveFromWatchList)
-            {
-                // Swap-back; retry this index
-                RemoveAtSwapBack(watchedClauses, index);
-                continue;
-            }
-
-            index++;
-        }
-
-        return PropagationResult.NoConflict;
-    }
-
-    private static ClauseUpdate UpdateClause(
-        WatchedLiteralDatabase watches,
-        ClauseReference clauseReference,
-        Literal falsifiedLiteral,
-        SolverState state,
-        SearchStatistics statistics)
-    {
-        var clause = watches.Clauses.Get(clauseReference);
+        var clause = Watches.Clauses.Get(clauseRef);
         if (clause.IsDeleted)
-            return ClauseUpdate.Remove;
+            return PropagationResult.NoConflict;
+
+        var lit = clause.Literals[0];
+        var wasAssigned = state.IsAssigned(lit.Variable);
+        statistics.RecordPropagationClauseCheck();
+
+        if (!state.Enqueue(lit, clauseRef))
+            return PropagationResult.Conflict(clauseRef);
+
+        if (!wasAssigned)
+            RecordUnitPropagation(clause, statistics);
+
+        return PropagationResult.NoConflict;
+    }
+
+    private PropagationResult PropagateFalsifiedLiteral(
+        Literal falseLiteral,
+        SolverState state,
+        SearchStatistics statistics)
+    {
+        var watchList = Watches.GetWatchList(falseLiteral);
+
+        for (var idx = 0; idx < watchList.Count;)
+        {
+            var clauseRef = watchList[idx];
+            var result = UpdateWatchForFalsifiedLiteral(
+                clauseRef,
+                falseLiteral,
+                state,
+                statistics,
+                out var remove);
+
+            if (result.HasConflict)
+                return result;
+
+            if (remove)
+            {
+                // retry this idx after swap-back
+                RemoveAtSwapBack(watchList, idx);
+                continue;
+            }
+
+            idx++;
+        }
+
+        return PropagationResult.NoConflict;
+    }
+
+    private PropagationResult UpdateWatchForFalsifiedLiteral(
+        ClauseReference clauseRef,
+        Literal falseLiteral,
+        SolverState state,
+        SearchStatistics statistics,
+        out bool remove)
+    {
+        remove = false;
+
+        var clause = Watches.Clauses.Get(clauseRef);
+        if (clause.IsDeleted)
+        {
+            remove = true;
+            return PropagationResult.NoConflict;
+        }
 
         statistics.RecordPropagationClauseCheck();
 
-        var positions = watches.GetWatchPositions(clauseReference);
-        var (falsifiedPosition, otherPosition) = GetAffectedPositions(clause, positions, falsifiedLiteral);
-        var otherLiteral = clause.Literals[otherPosition];
+        var positions = Watches.GetWatchPositions(clauseRef);
+        var falsePos = FindFalsifiedWatchPosition(clause, positions, falseLiteral);
+        var otherPos = GetOtherWatchedPosition(positions, falsePos);
+        var otherLit = clause.Literals[otherPos];
 
-        if (GetLiteralValue(otherLiteral, state) == LiteralValue.True)
-            return ClauseUpdate.Keep;
+        if (EvaluateLiteral(otherLit, state) == LiteralValue.True)
+            return PropagationResult.NoConflict;
 
-        var replacementPosition = FindReplacementPosition(clause, falsifiedPosition, otherPosition, state);
-        if (replacementPosition >= 0)
+        if (TryReplaceFalsifiedWatch(
+                clauseRef,
+                clause,
+                falsePos,
+                otherPos,
+                state))
         {
-            watches.MoveWatch(clauseReference, falsifiedPosition, replacementPosition);
-            return ClauseUpdate.Remove;
+            remove = true;
+            return PropagationResult.NoConflict;
         }
 
-        // No replacement: unit or conflict
-        if (!state.Enqueue(otherLiteral, clauseReference))
-            return ClauseUpdate.Conflict(clauseReference);
+        // no replacement: the other watch is unit
+        if (!state.Enqueue(otherLit, clauseRef))
+            return PropagationResult.Conflict(clauseRef);
 
+        RecordUnitPropagation(clause, statistics);
+        return PropagationResult.NoConflict;
+    }
+
+    private static void RecordUnitPropagation(SolverClause clause, SearchStatistics statistics)
+    {
         if (clause.IsLearned)
             clause.BumpActivity();
 
         statistics.RecordUnitPropagations(1);
-        return ClauseUpdate.Keep;
     }
 
-    private static (int Falsified, int Other) GetAffectedPositions(
+    private static int FindFalsifiedWatchPosition(
         SolverClause clause,
         WatchPositions positions,
-        Literal falsifiedLiteral)
+        Literal falseLiteral)
     {
-        // Two watches; one just became false
-        if (clause.Literals[positions.First] == falsifiedLiteral)
-            return (positions.First, positions.Second);
+        if (clause.Literals[positions.First] == falseLiteral)
+            return positions.First;
 
-        if (clause.Literals[positions.Second] == falsifiedLiteral)
-            return (positions.Second, positions.First);
+        if (clause.Literals[positions.Second] == falseLiteral)
+            return positions.Second;
 
         throw new InvalidOperationException("The clause does not watch the expected literal.");
     }
 
-    private static int FindReplacementPosition(
+    private static int GetOtherWatchedPosition(WatchPositions positions, int pos) =>
+        positions.First == pos ? positions.Second : positions.First;
+
+    private bool TryReplaceFalsifiedWatch(
+        ClauseReference clauseRef,
         SolverClause clause,
-        int falsifiedPosition,
-        int otherPosition,
+        int falsePos,
+        int otherPos,
         SolverState state)
     {
-        for (var position = 0; position < clause.Literals.Count; position++)
+        var newPos = FindNonFalseReplacement(
+            clause,
+            falsePos,
+            otherPos,
+            state);
+        if (newPos < 0)
+            return false;
+
+        Watches.MoveWatch(clauseRef, falsePos, newPos);
+        return true;
+    }
+
+    private static int FindNonFalseReplacement(
+        SolverClause clause,
+        int falsePos,
+        int otherPos,
+        SolverState state)
+    {
+        for (var pos = 0; pos < clause.Literals.Count; pos++)
         {
-            if (position == falsifiedPosition || position == otherPosition)
+            if (pos == falsePos || pos == otherPos)
                 continue;
 
-            if (GetLiteralValue(clause.Literals[position], state) != LiteralValue.False)
-                return position;
+            if (EvaluateLiteral(clause.Literals[pos], state) != LiteralValue.False)
+                return pos;
         }
 
         return -1;
     }
 
-    private WatchedLiteralDatabase GetInitializedWatches(SolverState? state = null)
+    private void EnsureFormula(SolverState state)
     {
-        if (_watches is null)
-            throw new InvalidOperationException("The propagator was not initialized.");
-        if (state is not null && !ReferenceEquals(_watches.Clauses.Formula, state.Formula))
+        if (!ReferenceEquals(Watches.Clauses.Formula, state.Formula))
             throw new InvalidOperationException("The propagator belongs to another formula.");
-
-        return _watches;
     }
 
-    private static LiteralValue GetLiteralValue(Literal literal, SolverState state)
-    {
-        var value = state.GetValue(literal.Variable);
+    private WatchedLiteralDatabase Watches => _watches
+        ?? throw new InvalidOperationException("The propagator is not initialized.");
 
-        if (!value.HasValue)
+    private static LiteralValue EvaluateLiteral(Literal lit, SolverState state)
+    {
+        var val = state.GetValue(lit.Variable);
+
+        if (!val.HasValue)
             return LiteralValue.Unassigned;
 
-        return value.Value != literal.IsNegated
+        var isTrue = lit.IsNegated ? !val.Value : val.Value;
+
+        return isTrue
             ? LiteralValue.True
             : LiteralValue.False;
     }
 
-    private static void RemoveAtSwapBack(List<ClauseReference> values, int index)
+    private static void RemoveAtSwapBack(List<ClauseReference> values, int idx)
     {
-        var lastIndex = values.Count - 1;
-        values[index] = values[lastIndex];
-        values.RemoveAt(lastIndex);
-    }
-
-    private readonly record struct ClauseUpdate(
-        PropagationResult Result,
-        bool RemoveFromWatchList)
-    {
-        public static ClauseUpdate Keep => new(PropagationResult.NoConflict, false);
-        public static ClauseUpdate Remove => new(PropagationResult.NoConflict, true);
-        public static ClauseUpdate Conflict(ClauseReference clause) =>
-            new(PropagationResult.Conflict(clause), false);
+        var last = values.Count - 1;
+        values[idx] = values[last];
+        values.RemoveAt(last);
     }
 
     private enum LiteralValue

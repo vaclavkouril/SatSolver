@@ -1,15 +1,12 @@
 using SatSolver.Core.Cnf;
 using SatSolver.Core.Solving.Clauses;
-using SatSolver.Core.Solving.Dpll;
 using SatSolver.Core.Solving.Propagation;
 using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Tests;
 
-/// <summary>Tests watched-literal propagation.</summary>
 public sealed class WatchedLiteralPropagatorTests
 {
-    /// <summary>Verifies watch movement before propagation.</summary>
     [Fact]
     public void Propagate_MovedWatch_PropagatesTheRemainingLiteral()
     {
@@ -20,7 +17,6 @@ public sealed class WatchedLiteralPropagatorTests
         Assert.Equal(1, result.UnitPropagations);
     }
 
-    /// <summary>Verifies initial unit-clause propagation.</summary>
     [Fact]
     public void Propagate_UnitClauseChain_DerivesEveryConsequence()
     {
@@ -31,7 +27,6 @@ public sealed class WatchedLiteralPropagatorTests
         Assert.Equal(3, result.UnitPropagations);
     }
 
-    /// <summary>Verifies an initial empty-clause conflict.</summary>
     [Fact]
     public void Propagate_EmptyClause_ReportsConflict()
     {
@@ -40,12 +35,30 @@ public sealed class WatchedLiteralPropagatorTests
         Assert.True(result.HasConflict);
     }
 
+    [Fact]
+    public void Initialize_NewFormula_RebuildsTheWatchLists()
+    {
+        var propagator = new WatchedLiteralPropagator();
+
+        var first = Propagate(propagator, Formula(1, Clause(1)));
+        var second = Propagate(propagator, Formula(1, Clause(-1)));
+
+        Assert.Equal([Literal(1)], first.Assignments);
+        Assert.Equal([Literal(-1)], second.Assignments);
+    }
+
     private static PropagationTestResult Propagate(CnfFormula formula, params Literal[] initialAssignments)
+        => Propagate(new WatchedLiteralPropagator(), formula, initialAssignments);
+
+    private static PropagationTestResult Propagate(
+        IPropagationEngine propagator,
+        CnfFormula formula,
+        params Literal[] initialAssignments)
     {
         var state = new SolverState(formula);
-        var initialAssignmentConflict = initialAssignments.Any(literal => !state.TryAssign(literal));
+        var initialAssignmentConflict = initialAssignments.Any(literal =>
+            !state.Enqueue(literal, reason: null));
         var statistics = new SearchStatistics();
-        var propagator = new WatchedLiteralPropagator();
         propagator.Initialize(new ClauseDatabase(formula));
 
         var propagationResult = initialAssignmentConflict

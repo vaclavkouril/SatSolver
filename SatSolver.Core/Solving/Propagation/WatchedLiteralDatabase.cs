@@ -4,18 +4,23 @@ using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Core.Solving.Propagation;
 
-/// <summary>Two watch offsets for one clause.</summary>
-internal struct WatchPositions(int first, int second)
+// both watch positions; units use 0 twice
+internal struct WatchPositions
 {
-    public int First = first;
-    public int Second = second;
+    public WatchPositions(int first, int second)
+    {
+        First = first;
+        Second = second;
+    }
+
+    public int First;
+    public int Second;
 }
 
-/// <summary>Mutable watched-literal index.</summary>
 internal sealed class WatchedLiteralDatabase
 {
     private readonly List<WatchPositions> _watchPositions = [];
-    private readonly List<ClauseReference>[] _clausesWatchingLiteral;
+    private readonly List<ClauseReference>[] _watchLists;
     private readonly List<ClauseReference> _initialUnitClauses = [];
 
     public WatchedLiteralDatabase(ClauseDatabase clauses)
@@ -23,7 +28,7 @@ internal sealed class WatchedLiteralDatabase
         ArgumentNullException.ThrowIfNull(clauses);
 
         Clauses = clauses;
-        _clausesWatchingLiteral = CreateWatchLists(clauses.VariableCount);
+        _watchLists = CreateWatchLists(clauses.VariableCount);
 
         foreach (var clause in clauses.ActiveClauses)
             RegisterClause(clause.Reference);
@@ -33,58 +38,58 @@ internal sealed class WatchedLiteralDatabase
     public ClauseReference? EmptyClause { get; private set; }
     public IReadOnlyList<ClauseReference> InitialUnitClauses => _initialUnitClauses;
 
-    public void RegisterClause(ClauseReference reference)
+    public void RegisterClause(ClauseReference clauseRef)
     {
-        var clause = Clauses.Get(reference);
+        var clause = Clauses.Get(clauseRef);
         if (clause.IsDeleted)
             return;
 
-        EnsureWatchSlot(reference);
+        EnsureWatchSlot(clauseRef);
 
         switch (clause.Literals.Count)
         {
             case 0:
-                EmptyClause ??= reference;
+                EmptyClause ??= clauseRef;
                 break;
             case 1:
-                RegisterUnitClause(reference, clause.Literals[0]);
+                RegisterUnitClause(clauseRef, clause.Literals[0]);
                 break;
             default:
-                RegisterNonUnitClause(reference, clause.Literals);
+                RegisterNonUnitClause(clauseRef, clause.Literals);
                 break;
         }
     }
 
-    public List<ClauseReference> GetClausesWatching(Literal literal) =>
-        _clausesWatchingLiteral[GetLiteralIndex(literal)];
+    public List<ClauseReference> GetWatchList(Literal lit) =>
+        _watchLists[GetLiteralIndex(lit)];
 
     public WatchPositions GetWatchPositions(ClauseReference clause) =>
         _watchPositions[clause.Value];
 
-    public void MoveWatch(ClauseReference clause, int previousPosition, int replacementPosition)
+    public void MoveWatch(ClauseReference clause, int oldPos, int newPos)
     {
         var positions = _watchPositions[clause.Value];
 
-        if (positions.First == previousPosition)
-            positions.First = replacementPosition;
-        else if (positions.Second == previousPosition)
-            positions.Second = replacementPosition;
+        if (positions.First == oldPos)
+            positions.First = newPos;
+        else if (positions.Second == oldPos)
+            positions.Second = newPos;
         else
             throw new InvalidOperationException("The requested position is not watched.");
 
         _watchPositions[clause.Value] = positions;
 
-        // Old watch removal in caller
-        var replacement = Clauses.Get(clause).Literals[replacementPosition];
+        // old entry is removed while its list is traversed
+        var replacement = Clauses.Get(clause).Literals[newPos];
         AddWatch(replacement, clause);
     }
 
-    private void RegisterUnitClause(ClauseReference clause, Literal literal)
+    private void RegisterUnitClause(ClauseReference clause, Literal lit)
     {
-        // One shared position for a unit clause
+        // unit clauses use their only literal twice
         _watchPositions[clause.Value] = new WatchPositions(0, 0);
         _initialUnitClauses.Add(clause);
-        AddWatch(literal, clause);
+        AddWatch(lit, clause);
     }
 
     private void RegisterNonUnitClause(ClauseReference clause, IReadOnlyList<Literal> literals)
@@ -100,14 +105,22 @@ internal sealed class WatchedLiteralDatabase
             _watchPositions.Add(default);
     }
 
-    private void AddWatch(Literal literal, ClauseReference clause) =>
-        GetClausesWatching(literal).Add(clause);
+    private void AddWatch(Literal lit, ClauseReference clause) =>
+        GetWatchList(lit).Add(clause);
 
-    private static List<ClauseReference>[] CreateWatchLists(int variableCount) =>
-        Enumerable.Range(0, variableCount * 2)
-            .Select(_ => new List<ClauseReference>())
-            .ToArray();
+    private static List<ClauseReference>[] CreateWatchLists(int varCount)
+    {
+        var watchLists = new List<ClauseReference>[varCount * 2];
 
-    private static int GetLiteralIndex(Literal literal) =>
-        2 * (literal.Variable - 1) + (literal.IsNegated ? 1 : 0);
+        for (var idx = 0; idx < watchLists.Length; idx++)
+            watchLists[idx] = [];
+
+        return watchLists;
+    }
+
+    private static int GetLiteralIndex(Literal lit)
+    {
+        var offset = 2 * (lit.Variable - 1);
+        return lit.IsNegated ? offset + 1 : offset;
+    }
 }

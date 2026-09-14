@@ -4,94 +4,101 @@ namespace SatSolver.IO.Dimacs.Parsing;
 
 internal sealed class DimacsLexer(string input)
 {
-    private int _position;
+    private int _idx;
     private int _line = 1;
-    private int _column = 1;
-    private bool _isAtLineStart = true;
-    private bool _previousCharacterWasCarriageReturn;
+    private int _col = 1;
+    private bool _atLineStart = true;
+    private bool _hadCr;
 
     public DimacsToken NextToken()
     {
-        SkipWhitespace();
+        SkipTrivia();
         if (IsEnd)
-            return new DimacsToken(DimacsTokenKind.EndOfInput, string.Empty, _line, _column);
+            return new DimacsToken(DimacsTokenKind.EndOfInput, string.Empty, _line, _col);
 
         var line = _line;
-        var column = _column;
-        if (_isAtLineStart && CurrentCharacter == 'c')
-            return ReadComment(line, column);
-        if (CurrentCharacter == '%')
-            return ReadEndMarker(line, column);
+        var col = _col;
+        if (Current == '%')
+            return ReadEndMarker(line, col);
 
         var text = ReadNonWhitespaceText();
         var kind = IsInteger(text) ? DimacsTokenKind.Integer : DimacsTokenKind.Word;
-        return new DimacsToken(kind, text, line, column);
+        return new DimacsToken(kind, text, line, col);
     }
 
-    private DimacsToken ReadComment(int line, int column)
+    private void SkipTrivia()
     {
-        var start = _position;
-        while (!IsEnd && CurrentCharacter is not '\r' and not '\n')
-            MoveNext();
+        while (true)
+        {
+            SkipWhitespace();
+            if (IsEnd || !_atLineStart || Current != 'c')
+                return;
 
-        return new DimacsToken(DimacsTokenKind.Comment, input[start.._position], line, column);
+            SkipComment();
+        }
     }
 
-    private DimacsToken ReadEndMarker(int line, int column)
+    private void SkipComment()
+    {
+        while (!IsEnd && Current is not '\r' and not '\n')
+            MoveNext();
+    }
+
+    private DimacsToken ReadEndMarker(int line, int col)
     {
         MoveNext();
-        return new DimacsToken(DimacsTokenKind.EndMarker, "%", line, column);
+        return new DimacsToken(DimacsTokenKind.EndMarker, "%", line, col);
     }
 
     private string ReadNonWhitespaceText()
     {
-        var start = _position;
-        while (!IsEnd && !char.IsWhiteSpace(CurrentCharacter))
+        var start = _idx;
+        while (!IsEnd && !char.IsWhiteSpace(Current))
             MoveNext();
 
-        return input[start.._position];
+        return input[start.._idx];
     }
 
     private void SkipWhitespace()
     {
-        while (!IsEnd && char.IsWhiteSpace(CurrentCharacter))
+        while (!IsEnd && char.IsWhiteSpace(Current))
             MoveNext();
     }
 
     private void MoveNext()
     {
-        var character = CurrentCharacter;
-        _position++;
-        if (character == '\r')
+        var ch = Current;
+        _idx++;
+        if (ch == '\r')
         {
             BeginNewLine();
-            _previousCharacterWasCarriageReturn = true;
+            _hadCr = true;
             return;
         }
-        if (character == '\n')
+        if (ch == '\n')
         {
-            if (!_previousCharacterWasCarriageReturn)
+            if (!_hadCr)
                 BeginNewLine();
 
-            _previousCharacterWasCarriageReturn = false;
+            _hadCr = false;
             return;
         }
 
-        _column++;
-        _isAtLineStart = false;
-        _previousCharacterWasCarriageReturn = false;
+        _col++;
+        _atLineStart = false;
+        _hadCr = false;
     }
 
     private void BeginNewLine()
     {
         _line++;
-        _column = 1;
-        _isAtLineStart = true;
+        _col = 1;
+        _atLineStart = true;
     }
 
     private static bool IsInteger(string text) =>
         int.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out _);
 
-    private bool IsEnd => _position >= input.Length;
-    private char CurrentCharacter => input[_position];
+    private bool IsEnd => _idx >= input.Length;
+    private char Current => input[_idx];
 }

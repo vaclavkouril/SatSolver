@@ -1,15 +1,13 @@
 using SatSolver.Core.Cnf;
-using SatSolver.Core.Solving.Cdcl.Configuration;
 using SatSolver.Core.Solving.Clauses;
 using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Core.Solving.Cdcl.Analysis;
 
-/// <summary>Trail-based resolution analysis.</summary>
-internal sealed class ResolutionConflictAnalyzer(ConflictAnalysisMethod method) : IConflictAnalyzer
+public abstract class ResolutionConflictAnalyzer : IConflictAnalyzer
 {
     private bool[] _seen = [];
-    private readonly List<int> _touchedVariables = [];
+    private readonly List<int> _touchedVars = [];
 
     public ConflictAnalysisResult Analyze(
         ClauseReference conflict,
@@ -39,144 +37,159 @@ internal sealed class ResolutionConflictAnalyzer(ConflictAnalysisMethod method) 
         SolverState state,
         ClauseDatabase clauses)
     {
-        // Slot zero reserved for the asserting literal
-        var learnedLiterals = new List<Literal> { default };
-        var additionalClauses = new List<LearnedClause>();
-        LearnedClause? assertingClause = null;
-        var currentLevelCount = 0;
-        var clauseReference = conflict;
-        var trailIndex = state.Trail.Count - 1;
-        var hasPivot = false;
-        Literal pivot = default;
+        // slot 0 = asserting literal
+        var lits = new List<Literal> { default };
+        var learned = new List<LearnedClause>();
+        var clauseRef = conflict;
+        int? resolvedVar = null;
+        var trailIdx = state.Trail.Count - 1;
+        var openCurrentLiterals = 0;
 
+        // walk the trail backwards
         while (true)
         {
-            AddClauseLiterals(
-                clauses.Get(clauseReference),
-                hasPivot ? pivot.Variable : null,
+            openCurrentLiterals += AddUnseenClauseLiterals(
+                clauses.Get(clauseRef),
+                resolvedVar,
                 state,
-                learnedLiterals,
-                ref currentLevelCount);
+                lits);
 
-            // Resolve the latest current-level assignment
-            pivot = FindLatestCurrentLevelLiteral(state, ref trailIndex);
+            var pivot = FindLatestCurrentLevelLiteral(state, ref trailIdx);
             _seen[pivot.Variable] = false;
-            currentLevelCount--;
+            openCurrentLiterals--;
 
             var antecedent = state.GetReason(pivot.Variable);
-            var reachedCut = ReachedCut(currentLevelCount, antecedent);
-
-            if (reachedCut)
+            if (IsCutReached(openCurrentLiterals, antecedent))
             {
-                var learnedClause = CreateLearnedClause(learnedLiterals, pivot, state);
+                learned.Add(CreateLearnedClause(lits, pivot, state));
 
-                // First cut = backjump clause
-                if (assertingClause is null)
-                    assertingClause = learnedClause;
-                else
-                    additionalClauses.Add(learnedClause);
-
-                if (method != ConflictAnalysisMethod.MultipleCuts ||
-                    !CanResolveFurther(antecedent, pivot.Variable, state, clauses))
-                    return new ConflictAnalysisResult(
-                        assertingClause,
-                        additionalClauses);
+                if (ShouldFinishAnalysis(antecedent, pivot.Variable, state, clauses))
+                    return CreateAnalysisResult(learned);
             }
 
             if (!antecedent.HasValue)
                 throw new InvalidOperationException("The conflict cut did not reach a decision literal.");
 
-            clauseReference = antecedent.Value;
-            hasPivot = true;
+            clauseRef = antecedent.Value;
+            resolvedVar = pivot.Variable;
         }
     }
 
-    private void AddClauseLiterals(
+    private int AddUnseenClauseLiterals(
         SolverClause clause,
-        int? pivotVariable,
+        int? resolvedVar,
         SolverState state,
-        List<Literal> learnedLiterals,
-        ref int currentLevelCount)
+        List<Literal> learnedLiterals)
     {
-        foreach (var literal in clause.Literals)
+        var currentCount = 0;
+
+        foreach (var lit in clause.Literals)
         {
-            if (literal.Variable == pivotVariable || _seen[literal.Variable])
+            if (lit.Variable == resolvedVar || _seen[lit.Variable])
                 continue;
 
-            var level = state.GetDecisionLevel(literal.Variable);
+            var level = state.GetDecisionLevel(lit.Variable);
             if (level == 0)
                 continue;
 
-            _seen[literal.Variable] = true;
-            _touchedVariables.Add(literal.Variable);
+            _seen[lit.Variable] = true;
+            _touchedVars.Add(lit.Variable);
 
             if (level == state.CurrentDecisionLevel)
-                currentLevelCount++;
+                currentCount++;
             else
-                learnedLiterals.Add(literal);
+                learnedLiterals.Add(lit);
         }
+
+        return currentCount;
     }
 
-    private Literal FindLatestCurrentLevelLiteral(SolverState state, ref int trailIndex)
+    private Literal FindLatestCurrentLevelLiteral(SolverState state, ref int trailIdx)
     {
-        while (trailIndex >= 0)
+        while (trailIdx >= 0)
         {
-            var literal = state.Trail[trailIndex--];
-            if (_seen[literal.Variable])
-                return literal;
+            var lit = state.Trail[trailIdx--];
+            if (_seen[lit.Variable])
+                return lit;
         }
 
         throw new InvalidOperationException("The conflict has no current-level literal.");
     }
 
-    private bool ReachedCut(int currentLevelCount, ClauseReference? antecedent) => method switch
-    {
-        ConflictAnalysisMethod.FirstUip => currentLevelCount == 0,
-        ConflictAnalysisMethod.DecisionLiteral => !antecedent.HasValue,
-        ConflictAnalysisMethod.MultipleCuts => currentLevelCount == 0,
-        _ => throw new ArgumentOutOfRangeException(nameof(method))
-    };
+    protected abstract bool IsCutReached(
+        int openCurrentLiterals,
+        ClauseReference? antecedent);
 
-    private static bool CanResolveFurther(
+    protected virtual bool ShouldFinishAnalysis(
         ClauseReference? antecedent,
-        int pivotVariable,
+        int pivotVar,
+        SolverState state,
+        ClauseDatabase clauses) => true;
+
+    protected static bool HasAnotherCurrentLevelPivot(
+        ClauseReference? antecedent,
+        int pivotVar,
         SolverState state,
         ClauseDatabase clauses)
     {
-        // Another current-level pivot required
-        return antecedent.HasValue &&
-            clauses.Get(antecedent.Value).Literals.Any(
-                literal => literal.Variable != pivotVariable &&
-                    state.GetDecisionLevel(literal.Variable) == state.CurrentDecisionLevel);
+        if (!antecedent.HasValue)
+            return false;
+
+        // another current-level pivot means another cut
+        foreach (var lit in clauses.Get(antecedent.Value).Literals)
+        {
+            if (lit.Variable != pivotVar &&
+                state.GetDecisionLevel(lit.Variable) == state.CurrentDecisionLevel)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static ConflictAnalysisResult CreateAnalysisResult(List<LearnedClause> learned)
+    {
+        return new ConflictAnalysisResult(
+            learned[0],
+            learned.Skip(1).ToArray());
     }
 
     private static LearnedClause CreateLearnedClause(
-        List<Literal> learnedLiterals,
+        List<Literal> lits,
         Literal pivot,
         SolverState state)
     {
-        learnedLiterals[0] = pivot.Negate();
+        // negated pivot asserts after backtracking
+        lits[0] = pivot.Negate();
 
-        var literals = learnedLiterals.ToArray();
-        var lbd = literals
-            .Select(literal => state.GetDecisionLevel(literal.Variable))
-            .Distinct()
-            .Count();
-
-        return new LearnedClause(literals, lbd);
+        var literals = lits.ToArray();
+        return new LearnedClause(literals, CountDecisionLevels(literals, state));
     }
 
-    private void EnsureCapacity(int variableCount)
+    private static int CountDecisionLevels(
+        IReadOnlyList<Literal> literals,
+        SolverState state)
     {
-        if (_seen.Length <= variableCount)
-            _seen = new bool[variableCount + 1];
+        var levels = new HashSet<int>();
+
+        foreach (var lit in literals)
+            levels.Add(state.GetDecisionLevel(lit.Variable));
+
+        return levels.Count;
+    }
+
+    private void EnsureCapacity(int varCount)
+    {
+        if (_seen.Length <= varCount)
+            _seen = new bool[varCount + 1];
     }
 
     private void ClearSeenVariables()
     {
-        foreach (var variable in _touchedVariables)
-            _seen[variable] = false;
+        foreach (var varId in _touchedVars)
+            _seen[varId] = false;
 
-        _touchedVariables.Clear();
+        _touchedVars.Clear();
     }
 }

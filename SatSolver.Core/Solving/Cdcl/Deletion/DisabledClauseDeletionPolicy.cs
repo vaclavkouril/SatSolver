@@ -3,8 +3,7 @@ using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Core.Solving.Cdcl.Deletion;
 
-/// <summary>Clause-deletion policy that retains every learned clause.</summary>
-internal sealed class DisabledClauseDeletionPolicy : IClauseDeletionPolicy
+public sealed class DisabledClauseDeletionPolicy : IClauseDeletionPolicy
 {
     public IReadOnlyList<ClauseReference> SelectForDeletion(
         IEnumerable<SolverClause> clauses,

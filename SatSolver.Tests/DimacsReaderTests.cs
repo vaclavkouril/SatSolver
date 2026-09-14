@@ -27,6 +27,51 @@ public class DimacsReaderTests
             clause => AssertClause(clause, new Literal(3, true), new Literal(4, true)));
     }
 
+    [Fact]
+    public void Read_SkipsCommentLinesInsideHeader()
+    {
+        const string input = """
+            p cnf
+            c number of variables
+            3
+            c number of clauses
+            2
+            1 0
+            -2 3 0
+            """;
+
+        var formula = new DimacsReader().Read(new StringReader(input));
+
+        Assert.Equal(3, formula.VariableCount);
+        Assert.Collection(
+            formula.Clauses,
+            clause => AssertClause(clause, new Literal(1, false)),
+            clause => AssertClause(clause, new Literal(2, true), new Literal(3, false)));
+    }
+
+    [Fact]
+    public void Read_SkipsCommentLinesBetweenClauseLiterals()
+    {
+        const string input = """
+            p cnf 3 2
+            1
+            c second literal
+            -2
+            c clause terminator
+            0
+            c second clause
+            3
+            0
+            """;
+
+        var formula = new DimacsReader().Read(new StringReader(input));
+
+        Assert.Collection(
+            formula.Clauses,
+            clause => AssertClause(clause, new Literal(1, false), new Literal(2, true)),
+            clause => AssertClause(clause, new Literal(3, false)));
+    }
+
     [Theory]
     [InlineData("p cnf 2 1\n3 0")]
     [InlineData("p cnf 2 2\n1 0")]

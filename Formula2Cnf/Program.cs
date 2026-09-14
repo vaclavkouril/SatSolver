@@ -1,4 +1,8 @@
+using System.CommandLine;
+using System.CommandLine.Parsing;
+using SatSolver.Core.Cnf;
 using SatSolver.Core.Encoding;
+using SatSolver.Core.Formulas;
 using SatSolver.IO.Dimacs;
 using SatSolver.IO.Formula;
 
@@ -6,68 +10,47 @@ namespace Formula2Cnf;
 
 internal static class Program
 {
-    public static int Main(string[] args)
+    public static int Main(string[] args) => CreateCommand().Parse(args).Invoke();
+
+    private static RootCommand CreateCommand()
     {
-        var paths = new List<string>();
-        var encoding = TseitinEncoding.Implications;
-
-        for (var index = 0; index < args.Length; index++)
+        var input = new Argument<FileInfo?>("input")
         {
-            var argument = args[index];
-            switch (argument)
-            {
-                case "-e" or "--equivalences":
-                    encoding = TseitinEncoding.Equivalences;
-                    break;
-                case "--implications":
-                    encoding = TseitinEncoding.Implications;
-                    break;
-                case "--encoding":
-                    if (++index >= args.Length || !TryParseEncoding(args[index], out encoding))
-                    {
-                        Console.Error.WriteLine("Expected 'equivalences' or 'implications' after --encoding.");
-                        return 2;
-                    }
-                    break;
-                case "-h" or "--help":
-                    PrintUsage(Console.Out);
-                    return 0;
-                case var _ when argument.StartsWith('-'):
-                    Console.Error.WriteLine($"Unknown option: {argument}");
-                    PrintUsage(Console.Error);
-                    return 2;
-                default:
-                    paths.Add(argument);
-                    break;
-            }
-        }
-
-        if (paths.Count > 2)
+            Description = "Formula input file.",
+            Arity = ArgumentArity.ZeroOrOne
+        };
+        var output = new Argument<FileInfo?>("output")
         {
-            Console.Error.WriteLine("Expected at most an input file and an output file.");
-            PrintUsage(Console.Error);
-            return 2;
-        }
-
-        try
+            Description = "DIMACS output file.",
+            Arity = ArgumentArity.ZeroOrOne
+        };
+        var encoding = new Option<TseitinEncoding>("--encoding")
         {
-            using var input = paths.Count > 0 ? File.OpenText(paths[0]) : Console.In;
-            using var output = paths.Count > 1 ? File.CreateText(paths[1]) : Console.Out;
+            Description = "Tseitin encoding: equivalences or implications.",
+            HelpName = "equivalences|implications",
+            DefaultValueFactory = _ => TseitinEncoding.Implications,
+            CustomParser = ParseEncoding
+        };
+        var command = new RootCommand("Convert a simplified SMT-LIB formula to DIMACS CNF.");
+        command.Arguments.Add(input);
+        command.Arguments.Add(output);
+        command.Options.Add(encoding);
+        command.SetAction(result => ConvertFormula(
+            result.GetValue(input),
+            result.GetValue(output),
+            result.GetValue(encoding)));
 
-            var formula = new FormulaReader().Read(input);
-            var cnf = new TseitinEncoder().Encode(formula, encoding);
-            new DimacsWriter().Write(cnf, output);
-            return 0;
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or FormatException or ArgumentException)
-        {
-            Console.Error.WriteLine(exception.Message);
-            return 1;
-        }
+        return command;
     }
 
-    private static void PrintUsage(TextWriter writer) =>
-        writer.WriteLine("Usage: formula2cnf [--encoding equivalences|implications] [input [output]]");
+    private static TseitinEncoding ParseEncoding(ArgumentResult result)
+    {
+        if (result.Tokens.Count == 1 && TryParseEncoding(result.Tokens[0].Value, out var encoding))
+            return encoding;
+
+        result.AddError("Expected 'equivalences' or 'implications' after --encoding.");
+        return TseitinEncoding.Implications;
+    }
 
     private static bool TryParseEncoding(string value, out TseitinEncoding encoding)
     {
@@ -83,5 +66,42 @@ internal static class Program
                 encoding = default;
                 return false;
         }
+    }
+
+    private static int ConvertFormula(FileInfo? input, FileInfo? output, TseitinEncoding encoding)
+    {
+        try
+        {
+            var formula = ReadFormula(input);
+            var cnf = new TseitinEncoder().Encode(formula, encoding);
+            WriteFormula(cnf, output);
+            return 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or ArgumentException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static Formula ReadFormula(FileInfo? file)
+    {
+        if (file is null)
+            return new FormulaReader().Read(Console.In);
+
+        using var reader = file.OpenText();
+        return new FormulaReader().Read(reader);
+    }
+
+    private static void WriteFormula(CnfFormula cnf, FileInfo? file)
+    {
+        if (file is null)
+        {
+            new DimacsWriter().Write(cnf, Console.Out);
+            return;
+        }
+
+        using var writer = file.CreateText();
+        new DimacsWriter().Write(cnf, writer);
     }
 }

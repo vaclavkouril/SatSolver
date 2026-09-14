@@ -1,11 +1,16 @@
 using SatSolver.Core.Solving.Clauses;
-using SatSolver.Core.Solving.Cdcl.Configuration;
 
 namespace SatSolver.Core.Solving.Cdcl.Deletion;
 
-/// <summary>Deletes the least active eligible learned clauses first.</summary>
-internal sealed class ActivityClauseDeletionPolicy(ClauseDeletionSettings settings) : ClauseDeletionPolicy(settings)
+public sealed class ActivityClauseDeletionPolicy : ClauseDeletionPolicy
 {
+    public ActivityClauseDeletionPolicy(
+        int permanentLbdLimit = 2,
+        double deletionFraction = 0.5)
+        : base(permanentLbdLimit, deletionFraction)
+    {
+    }
+
     protected override IOrderedEnumerable<SolverClause> OrderCandidates(
         IEnumerable<SolverClause> candidates) =>
         candidates.OrderBy(clause => clause.Activity)

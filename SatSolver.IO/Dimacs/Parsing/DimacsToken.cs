@@ -2,7 +2,6 @@ namespace SatSolver.IO.Dimacs.Parsing;
 
 internal enum DimacsTokenKind
 {
-    Comment,
     Word,
     Integer,
     EndMarker,
@@ -13,7 +12,6 @@ internal sealed record DimacsToken(DimacsTokenKind Kind, string Text, int Line, 
 {
     public string DisplayName => Kind switch
     {
-        DimacsTokenKind.Comment => "a comment",
         DimacsTokenKind.Word => $"'{Text}'",
         DimacsTokenKind.Integer => $"integer '{Text}'",
         DimacsTokenKind.EndMarker => "end marker '%'",

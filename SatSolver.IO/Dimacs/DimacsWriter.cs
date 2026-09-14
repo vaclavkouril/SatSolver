@@ -13,18 +13,13 @@ public class DimacsWriter
             throw new ArgumentOutOfRangeException(nameof(formula), "Variable count cannot be negative.");
 
         WriteComments(formula, writer);
-        WriteHeader(formula.VariableCount, formula.Clauses.Count, writer);
-        
+        writer.WriteLine($"p cnf {formula.VariableCount} {formula.Clauses.Count}");
+
         foreach (var clause in formula.Clauses)
         {
             ArgumentNullException.ThrowIfNull(clause);
             WriteClause(clause, formula.VariableCount, writer);
         }
-    }
-
-    private static void WriteHeader(int variableCount, int clauseCount, TextWriter writer)
-    {
-        writer.WriteLine($"p cnf {variableCount} {clauseCount}");
     }
 
     private static void WriteComments(CnfFormula formula, TextWriter writer)
@@ -42,34 +37,34 @@ public class DimacsWriter
         IReadOnlyList<CnfVariable> variables,
         TextWriter writer)
     {
-        var matchingVariables = variables
-            .Where(variable => variable.Kind == kind)
-            .OrderBy(variable => variable.Index)
+        var vars = variables
+            .Where(v => v.Kind == kind)
+            .OrderBy(v => v.Index)
             .ToArray();
 
-        if (matchingVariables.Length == 0)
+        if (vars.Length == 0)
             return;
 
         writer.WriteLine($"c {title}:");
-        foreach (var variable in matchingVariables)
-            writer.WriteLine($"c   {variable.Index}: {variable.Description}");
+        foreach (var v in vars)
+            writer.WriteLine($"c   {v.Index}: {v.Description}");
     }
 
-    private static void WriteClause(Clause clause, int variableCount, TextWriter writer)
+    private static void WriteClause(Clause clause, int varCount, TextWriter writer)
     {
-        var literals = new HashSet<int>();
-        foreach (var literal in clause.Literals)
+        var vals = new HashSet<int>();
+        foreach (var lit in clause.Literals)
         {
-            if (literal.Variable < 1 || literal.Variable > variableCount)
+            if (lit.Variable < 1 || lit.Variable > varCount)
                 throw new ArgumentOutOfRangeException(nameof(clause), "Literal variable index is outside the formula's range.");
 
-            var value = literal.IsNegated ? -literal.Variable : literal.Variable;
-            if (!literals.Add(value))
+            var val = lit.IsNegated ? -lit.Variable : lit.Variable;
+            if (!vals.Add(val))
                 throw new ArgumentException("A clause cannot contain duplicate literals.", nameof(clause));
-            if (literals.Contains(-value))
+            if (vals.Contains(-val))
                 throw new ArgumentException("A clause cannot contain opposite literals.", nameof(clause));
 
-            writer.Write(value);
+            writer.Write(val);
             writer.Write(' ');
         }
 

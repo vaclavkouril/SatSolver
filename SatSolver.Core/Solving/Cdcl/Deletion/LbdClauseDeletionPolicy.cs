@@ -1,11 +1,16 @@
 using SatSolver.Core.Solving.Clauses;
-using SatSolver.Core.Solving.Cdcl.Configuration;
 
 namespace SatSolver.Core.Solving.Cdcl.Deletion;
 
-/// <summary>Deletes eligible clauses with the highest LBD first.</summary>
-internal sealed class LbdClauseDeletionPolicy(ClauseDeletionSettings settings) : ClauseDeletionPolicy(settings)
+public sealed class LbdClauseDeletionPolicy : ClauseDeletionPolicy
 {
+    public LbdClauseDeletionPolicy(
+        int permanentLbdLimit = 2,
+        double deletionFraction = 0.5)
+        : base(permanentLbdLimit, deletionFraction)
+    {
+    }
+
     protected override IOrderedEnumerable<SolverClause> OrderCandidates(
         IEnumerable<SolverClause> candidates) =>
         candidates.OrderByDescending(clause => clause.Lbd);

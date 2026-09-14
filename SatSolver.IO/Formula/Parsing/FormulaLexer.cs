@@ -2,70 +2,92 @@ namespace SatSolver.IO.Formula.Parsing;
 
 internal sealed class FormulaLexer(string input)
 {
-    private int _position;
+    private int _idx;
     private int _line = 1;
-    private int _column = 1;
+    private int _col = 1;
+    private bool _hadCr;
 
     public FormulaToken NextToken()
     {
         SkipWhitespace();
         if (IsEnd)
-            return new FormulaToken(FormulaTokenKind.EndOfInput, string.Empty, _line, _column);
+            return new FormulaToken(FormulaTokenKind.EndOfInput, string.Empty, _line, _col);
 
+        return ReadToken();
+    }
+
+    private FormulaToken ReadToken()
+    {
         var line = _line;
-        var column = _column;
-        return CurrentCharacter switch
+        var col = _col;
+        return Current switch
         {
-            '(' => ReadSingleCharacterToken(FormulaTokenKind.LeftParenthesis, line, column),
-            ')' => ReadSingleCharacterToken(FormulaTokenKind.RightParenthesis, line, column),
-            _ when char.IsLetter(CurrentCharacter) => ReadIdentifier(line, column),
-            _ => throw Error($"Unexpected character '{CurrentCharacter}'.")
+            '(' => ReadPunctuation(FormulaTokenKind.LeftParenthesis, line, col),
+            ')' => ReadPunctuation(FormulaTokenKind.RightParenthesis, line, col),
+            _ when char.IsLetter(Current) => ReadIdentifier(line, col),
+            _ => throw Error($"Unexpected character '{Current}'.")
         };
     }
 
-    private FormulaToken ReadSingleCharacterToken(FormulaTokenKind kind, int line, int column)
+    private FormulaToken ReadPunctuation(FormulaTokenKind kind, int line, int col)
     {
-        var text = CurrentCharacter.ToString();
+        var text = Current.ToString();
         MoveNext();
-        return new FormulaToken(kind, text, line, column);
+        return new FormulaToken(kind, text, line, col);
     }
 
-    private FormulaToken ReadIdentifier(int line, int column)
+    private FormulaToken ReadIdentifier(int line, int col)
     {
-        var start = _position;
+        var start = _idx;
         do
         {
             MoveNext();
-        } while (!IsEnd && char.IsLetterOrDigit(CurrentCharacter));
+        } while (!IsEnd && char.IsLetterOrDigit(Current));
 
-        return new FormulaToken(FormulaTokenKind.Identifier, input[start.._position], line, column);
+        return new FormulaToken(FormulaTokenKind.Identifier, input[start.._idx], line, col);
     }
 
     private void SkipWhitespace()
     {
-        while (!IsEnd && char.IsWhiteSpace(CurrentCharacter))
+        while (!IsEnd && char.IsWhiteSpace(Current))
             MoveNext();
     }
 
     private void MoveNext()
     {
-        if (CurrentCharacter == '\n')
+        var ch = Current;
+        _idx++;
+
+        if (ch == '\r')
         {
-            _line++;
-            _column = 1;
-        }
-        else
-        {
-            _column++;
+            StartNewLine();
+            _hadCr = true;
+            return;
         }
 
-        _position++;
+        if (ch == '\n')
+        {
+            if (!_hadCr)
+                StartNewLine();
+
+            _hadCr = false;
+            return;
+        }
+
+        _col++;
+        _hadCr = false;
     }
 
-    private bool IsEnd => _position >= input.Length;
+    private void StartNewLine()
+    {
+        _line++;
+        _col = 1;
+    }
 
-    private char CurrentCharacter => input[_position];
+    private bool IsEnd => _idx >= input.Length;
+
+    private char Current => input[_idx];
 
     private FormatException Error(string message) =>
-        new($"Line {_line}, column {_column}: {message}");
+        new($"Line {_line}, column {_col}: {message}");
 }

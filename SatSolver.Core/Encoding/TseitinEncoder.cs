@@ -5,119 +5,145 @@ namespace SatSolver.Core.Encoding;
 
 public sealed class TseitinEncoder
 {
-    private readonly Dictionary<string, int> _variables = new();
-    private readonly List<CnfVariable> _variableDescriptions = [];
+    private readonly Dictionary<string, int> _ids = new();
+    private readonly List<CnfVariable> _vars = [];
     private readonly List<Clause> _clauses = [];
-    private int _nextVariable;
+    private int _nextVar;
     private TseitinEncoding _encoding;
 
     public CnfFormula Encode(Formula formula, TseitinEncoding encoding = TseitinEncoding.Implications)
     {
         ArgumentNullException.ThrowIfNull(formula);
 
-        _variables.Clear();
-        _variableDescriptions.Clear();
-        _clauses.Clear();
-        _nextVariable = 0;
-        _encoding = encoding;
+        Reset(encoding);
 
-        AssignInputVariables(formula);
-        var root = EncodeFormula(formula);
+        AddInputVars(formula);
+        var root = EncodeNode(formula);
         AddClause(root);
 
-        return new CnfFormula(_nextVariable, _clauses.ToArray())
+        return new CnfFormula(_nextVar, _clauses.ToArray())
         {
-            Variables = _variableDescriptions.ToArray(),
+            Variables = _vars.ToArray(),
             RootLiteral = root
         };
     }
 
-    private void AssignInputVariables(Formula formula)
+    private void Reset(TseitinEncoding encoding)
+    {
+        _ids.Clear();
+        _vars.Clear();
+        _clauses.Clear();
+        _nextVar = 0;
+        _encoding = encoding;
+    }
+
+    private void AddInputVars(Formula formula)
     {
         switch (formula)
         {
-            case Variable variable:
-                GetVariable(variable.Name);
+            case Variable v:
+                GetOrAddInputVar(v.Name);
                 break;
             case Not not:
-                GetVariable(not.Operand.Name);
+                GetOrAddInputVar(not.Operand.Name);
                 break;
             case And and:
-                AssignInputVariables(and.Left);
-                AssignInputVariables(and.Right);
+                AddInputVars(and.Left);
+                AddInputVars(and.Right);
                 break;
             case Or or:
-                AssignInputVariables(or.Left);
-                AssignInputVariables(or.Right);
+                AddInputVars(or.Left);
+                AddInputVars(or.Right);
                 break;
             default:
                 throw new ArgumentException("Unknown formula type.", nameof(formula));
         }
     }
 
-    private int EncodeFormula(Formula formula) => formula switch
+    private int EncodeNode(Formula formula)
     {
-        Variable variable => GetVariable(variable.Name),
-        Not not => -GetVariable(not.Operand.Name),
-        And and => EncodeAnd(EncodeFormula(and.Left), EncodeFormula(and.Right)),
-        Or or => EncodeOr(EncodeFormula(or.Left), EncodeFormula(or.Right)),
-        _ => throw new ArgumentException("Unknown formula type.", nameof(formula))
-    };
+        switch (formula)
+        {
+            case Variable v:
+                return GetOrAddInputVar(v.Name);
+            case Not not:
+                return -GetOrAddInputVar(not.Operand.Name);
+            case And and:
+                return EncodeAnd(EncodeNode(and.Left), EncodeNode(and.Right));
+            case Or or:
+                return EncodeOr(EncodeNode(or.Left), EncodeNode(or.Right));
+            default:
+                throw new ArgumentException("Unknown formula type.", nameof(formula));
+        }
+    }
 
     private int EncodeAnd(int left, int right)
     {
-        var variable = NewAuxiliaryVariable("and gate");
-        AddClause(-variable, left);
-        AddClause(-variable, right);
-        if (_encoding == TseitinEncoding.Equivalences)
-            AddClause(variable, -left, -right);
+        var outVar = AddGateVar("and gate");
+        AddClause(-outVar, left);
+        AddClause(-outVar, right);
 
-        return variable;
+        if (_encoding == TseitinEncoding.Equivalences)
+            AddClause(outVar, -left, -right);
+
+        return outVar;
     }
 
     private int EncodeOr(int left, int right)
     {
-        var variable = NewAuxiliaryVariable("or gate");
-        AddClause(-variable, left, right);
+        var outVar = AddGateVar("or gate");
+        AddClause(-outVar, left, right);
+
         if (_encoding == TseitinEncoding.Equivalences)
         {
-            AddClause(variable, -left);
-            AddClause(variable, -right);
+            AddClause(outVar, -left);
+            AddClause(outVar, -right);
         }
 
-        return variable;
+        return outVar;
     }
 
-    private int GetVariable(string name)
+    private int GetOrAddInputVar(string name)
     {
-        if (_variables.TryGetValue(name, out var variable))
-            return variable;
+        if (_ids.TryGetValue(name, out var id))
+            return id;
 
-        variable = ++_nextVariable;
-        _variables.Add(name, variable);
-        _variableDescriptions.Add(new CnfVariable(variable, name, CnfVariableKind.Original));
-        return variable;
+        id = ++_nextVar;
+        _ids.Add(name, id);
+        _vars.Add(new CnfVariable(id, name, CnfVariableKind.Original));
+        return id;
     }
 
-    private int NewAuxiliaryVariable(string description)
+    private int AddGateVar(string description)
     {
-        var variable = ++_nextVariable;
-        _variableDescriptions.Add(new CnfVariable(variable, description, CnfVariableKind.Auxiliary));
-        return variable;
+        var id = ++_nextVar;
+        _vars.Add(new CnfVariable(id, description, CnfVariableKind.Auxiliary));
+        return id;
     }
 
-    private void AddClause(params int[] literals)
+    private void AddClause(params int[] vals)
     {
-        var distinctLiterals = new HashSet<int>();
-        foreach (var literal in literals)
+        var kept = new List<int>(vals.Length);
+        var seen = new HashSet<int>();
+
+        foreach (var val in vals)
         {
-            if (distinctLiterals.Contains(-literal))
+            if (seen.Contains(-val))
                 return;
-            distinctLiterals.Add(literal);
+
+            if (!seen.Add(val))
+                continue;
+
+            kept.Add(val);
         }
 
-        _clauses.Add(new Clause(distinctLiterals
-            .Select(literal => new Literal(Math.Abs(literal), literal < 0))
-            .ToArray()));
+        var literals = new Literal[kept.Count];
+        for (var idx = 0; idx < kept.Count; idx++)
+        {
+            var val = kept[idx];
+            literals[idx] = new Literal(Math.Abs(val), val < 0);
+        }
+
+        _clauses.Add(new Clause(literals));
     }
 }

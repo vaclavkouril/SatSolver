@@ -6,10 +6,8 @@ using SatSolver.Core.Solving.Heuristics;
 
 namespace SatSolver.Tests;
 
-/// <summary>Tests the DPLL solver.</summary>
 public sealed class DpllSolverTests
 {
-    /// <summary>Verifies solution by unit propagation.</summary>
     [Fact]
     public void Solve_UnitClauseChain_ReturnsSatModelAndPropagationStatistics()
     {
@@ -24,7 +22,6 @@ public sealed class DpllSolverTests
         Assert.True(result.Statistics.CpuTime >= TimeSpan.Zero);
     }
 
-    /// <summary>Verifies branch backtracking.</summary>
     [Fact]
     public void Solve_FirstBranchConflicts_BacktracksToASatisfyingBranch()
     {
@@ -37,19 +34,17 @@ public sealed class DpllSolverTests
         Assert.True(result.Statistics.Decisions >= 2);
     }
 
-    /// <summary>Verifies watched propagation after backtracking.</summary>
     [Fact]
     public void Solve_WatchedLiterals_FirstBranchConflicts_BacktracksToASatisfyingBranch()
     {
         var formula = Formula(3, Clause(-2), Clause(-1, 2, 3), Clause(-1, -3));
 
-        var result = Solve(formula, PropagationMethod.WatchedLiterals);
+        var result = Solve(formula, new WatchedLiteralPropagator());
 
         Assert.Equal(SolverStatus.SAT, result.Status);
         Assert.True(result.Statistics.Decisions >= 2);
     }
 
-    /// <summary>Verifies an unsatisfiable formula.</summary>
     [Fact]
     public void Solve_UnsatisfiableFormula_ReturnsNoModel()
     {
@@ -61,10 +56,26 @@ public sealed class DpllSolverTests
         Assert.Empty(result.Model);
     }
 
+    [Fact]
+    public void Solve_ReusesAnInjectedPropagatorForTheNextFormula()
+    {
+        var solver = new DpllSolver(
+            new FirstUnassignedHeuristic(),
+            new WatchedLiteralPropagator());
+
+        var first = solver.Solve(Formula(1, Clause(1)));
+        var second = solver.Solve(Formula(1, Clause(-1)));
+
+        Assert.Equal(SolverStatus.SAT, first.Status);
+        Assert.Equal([Literal(1)], first.Model);
+        Assert.Equal(SolverStatus.SAT, second.Status);
+        Assert.Equal([Literal(-1)], second.Model);
+    }
+
     private static SolverResult Solve(
         CnfFormula formula,
-        PropagationMethod propagationMethod = PropagationMethod.AdjacencyLists) =>
-        new DpllSolver(new FirstUnassignedHeuristic(), propagationMethod).Solve(formula);
+        IPropagationEngine? propagator = null) =>
+        new DpllSolver(new FirstUnassignedHeuristic(), propagator).Solve(formula);
 
     private static CnfFormula Formula(int variableCount, params Clause[] clauses) =>
         new(variableCount, clauses);

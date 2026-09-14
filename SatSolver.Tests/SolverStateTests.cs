@@ -3,10 +3,8 @@ using SatSolver.Core.Solving.Search;
 
 namespace SatSolver.Tests;
 
-/// <summary>Tests solver trail metadata.</summary>
 public sealed class SolverStateTests
 {
-    /// <summary>Verifies assignment level and reason storage.</summary>
     [Fact]
     public void Enqueue_StoresDecisionLevelAndReason()
     {
@@ -22,7 +20,6 @@ public sealed class SolverStateTests
         Assert.Null(state.GetReason(2));
     }
 
-    /// <summary>Verifies preservation of root assignments.</summary>
     [Fact]
     public void BacktrackToZero_KeepsRootAssignments()
     {

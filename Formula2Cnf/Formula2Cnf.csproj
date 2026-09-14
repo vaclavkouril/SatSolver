@@ -11,4 +11,8 @@
     <ProjectReference Include="..\SatSolver.Core\SatSolver.Core.csproj" />
     <ProjectReference Include="..\SatSolver.IO\SatSolver.IO.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" Version="2.0.12" />
+  </ItemGroup>
 </Project>

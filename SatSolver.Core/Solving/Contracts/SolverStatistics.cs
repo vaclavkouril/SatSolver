@@ -1,6 +1,5 @@
 namespace SatSolver.Core.Solving.Contracts;
 
-/// <summary>Solver-run measurements.</summary>
 public sealed record SolverStatistics(
     TimeSpan CpuTime,
     int Decisions,
@@ -14,11 +13,9 @@ public sealed record SolverStatistics(
     long LearnedLiterals = 0,
     long LearnedLbdTotal = 0)
 {
-    /// <summary>Mean learned-clause length.</summary>
     public double AverageLearnedClauseLength =>
         LearnedClauses == 0 ? 0 : (double)LearnedLiterals / LearnedClauses;
 
-    /// <summary>Mean learned-clause LBD.</summary>
     public double AverageLearnedClauseLbd =>
         LearnedClauses == 0 ? 0 : (double)LearnedLbdTotal / LearnedClauses;
 }
