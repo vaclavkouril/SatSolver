@@ -5,4 +5,5 @@
   <Project Path="SatSolver.Tests/SatSolver.Tests.csproj" />
   <Project Path="Formula2Cnf/Formula2Cnf.csproj" />
   <Project Path="Dpll/Dpll.csproj" />
+  <Project Path="Cdcl/Cdcl.csproj" />
 </Solution>
