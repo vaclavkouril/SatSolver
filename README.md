@@ -4,11 +4,7 @@ Implementation of my own SAT solver for NAIL094 - Decision procedures and verifi
 
 ## Layout
 
-- `SatSolver.Core/Solving/Contracts` - public solver and heuristic contracts.
-- `SatSolver.Core/Solving/Search` - assignment trail, levels, reasons and statistics.
-- `SatSolver.Core/Solving/Propagation` - adjacency-list and lazy watched-literal propagation.
-- `SatSolver.Core/Solving/Dpll` - chronological DPLL search.
-- `SatSolver.Core/Solving/Cdcl` - conflict analysis, learning, restarts and clause deletion.
+- `SatSolver.Core/` - library for Clauses, actual CDCL abnd DPLL algorithm implementations, heuristics, propagation, restarts and Tseitin encoder
 - `SatSolver.IO` - SMT-LIB and DIMACS readers/writers.
 - `Formula2Cnf` - translates a description of a formula in NNF into a DIMACS CNF formula using Tseitin encoding
 - `Dpll` - command-line solver.
@@ -41,5 +37,3 @@ Run `dpll --help` for DPLL propagation options and `cdcl --help` for CDCL config
   the database. When due, it bulk-builds a `PriorityQueue` and extracts the worst
   k of m eligible clauses in O(m + k log m), preserving input order for ties.
   Deleting a fixed fraction still has O(m log m) complexity.
-
-These structures use the .NET standard library without additional packages.
