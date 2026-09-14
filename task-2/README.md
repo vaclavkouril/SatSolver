@@ -37,7 +37,7 @@ One file:
 .venv/bin/python plot_results.py watched-results.txt -o plots/watched.png
 ```
 
-Compare multiple result files, expected same amount of data in both:
+Compare files with the same instances in the same order:
 
 ```sh
 .venv/bin/python plot_results.py \
@@ -54,3 +54,23 @@ Plot one metric instead of the default four:
 
 Available metrics: `cpu`, `decisions`, `propagations`, `checks`.
 Plots are saved to a file (PNG, SVG or PDF).
+
+## Plot CDCL results
+
+All 11 metrics by default, or one using `--metric`:
+
+```sh
+.venv/bin/python plot_cdcl.py cdcl-results.txt -o plots/cdcl.png
+.venv/bin/python plot_cdcl.py cdcl-results.txt --metric conflicts -o plots/conflicts.png
+```
+
+Metrics: `cpu`, `decisions`, `propagations`, `checks`, `conflicts`, `backjumps`,
+`restarts`, `learned`, `deleted`, `length`, `lbd`.
+Multiple files and `--labels` work the same way as above.
+
+## Compare CPU time (DPLL and CDCL)
+
+```sh
+.venv/bin/python plot_cpu.py dpll-results.txt cdcl-results.txt \
+  --labels DPLL CDCL -o plots/cpu-comparison.png
+```
