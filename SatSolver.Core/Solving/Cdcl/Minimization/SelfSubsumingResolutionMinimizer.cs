@@ -41,11 +41,8 @@ public sealed class SelfSubsumingResolutionMinimizer : ILearnedClauseMinimizer
     {
         var opposite = literal.Negate();
 
-        foreach (var clause in clauses.ActiveClauses)
+        foreach (var clause in clauses.GetActiveClausesContaining(opposite))
         {
-            if (!clause.Literals.Contains(opposite))
-                continue;
-
             if (FitsInsideLearnedClause(clause.Literals, opposite, learnedLiterals))
                 return true;
         }

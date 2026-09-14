@@ -1,7 +1,6 @@
 using SatSolver.Core.Cnf;
 using SatSolver.Core.Solving.Cdcl;
 using SatSolver.Core.Solving.Cdcl.Analysis;
-using SatSolver.Core.Solving.Cdcl.Deletion;
 using SatSolver.Core.Solving.Cdcl.Restarts;
 using SatSolver.Core.Solving.Contracts;
 using SatSolver.Core.Solving.Heuristics;
@@ -86,8 +85,7 @@ public sealed class CdclSolverTests
             decisionHeuristic: new FirstUnassignedHeuristic(),
             conflictAnalyzer: new MultipleCutsConflictAnalyzer(),
             restartPolicy: new DisabledRestartPolicy(),
-            clauseDeletionPolicy: new DisabledClauseDeletionPolicy(),
-            deletionSchedule: new LearnedClauseDeletionSchedule(isEnabled: false)).Solve(formula);
+            clauseDeletion: ClauseDeletionMethod.Disabled).Solve(formula);
 
         Assert.Equal(SolverStatus.SAT, result.Status);
         Assert.True(result.Statistics.LearnedClauses >= 2);

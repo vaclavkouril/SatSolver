@@ -18,6 +18,7 @@ public sealed class SolverState(CnfFormula formula) : ISolverStateView
     public int VariableCount => Formula.VariableCount;
     public IReadOnlyList<Literal> Trail => _trail;
     public int CurrentDecisionLevel => _levelStarts.Count;
+    public event Action<int>? VariableUnassigned;
 
     public bool IsAssigned(int variable) => GetValue(variable).HasValue;
 
@@ -123,6 +124,7 @@ public sealed class SolverState(CnfFormula formula) : ISolverStateView
             _decisionLevels[lit.Variable] = 0;
             _reasons[lit.Variable] = null;
             _trail.RemoveAt(_trail.Count - 1);
+            VariableUnassigned?.Invoke(lit.Variable);
         }
     }
 

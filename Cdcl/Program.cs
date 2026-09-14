@@ -3,7 +3,6 @@ using SatSolver.Core.Cnf;
 using SatSolver.Core.Encoding;
 using SatSolver.Core.Solving.Cdcl;
 using SatSolver.Core.Solving.Cdcl.Analysis;
-using SatSolver.Core.Solving.Cdcl.Deletion;
 using SatSolver.Core.Solving.Cdcl.Minimization;
 using SatSolver.Core.Solving.Cdcl.Restarts;
 using SatSolver.Core.Solving.Contracts;
@@ -30,10 +29,10 @@ internal static class Program
     {
         try
         {
+            var solver = CreateSolver(opts, result);
             var file = result.GetValue(opts.Input);
             using var input = OpenInput(file);
             var cnf = ReadFormula(input, file, result.GetValue(opts.Format));
-            var solver = CreateSolver(opts, result);
 
             SolverResultWriter.Write(solver.Solve(cnf), Console.Out);
             return 0;
@@ -48,82 +47,62 @@ internal static class Program
 
     private static CdclSolver CreateSolver(CdclCommandOptions opts, ParseResult result)
     {
-        var deletion = Name(result, opts.ClauseDeletion);
-
         return new CdclSolver(
-            decisionHeuristic: CreateHeuristic(Name(result, opts.Heuristic), result.GetValue(opts.Seed)),
-            propagator: CreatePropagator(Name(result, opts.Propagation)),
-            conflictAnalyzer: CreateConflictAnalyzer(Name(result, opts.ConflictAnalysis)),
-            minimizer: CreateMinimizer(Name(result, opts.Minimization)),
+            decisionHeuristic: CreateHeuristic(result.GetValue(opts.Heuristic), result.GetValue(opts.Seed)),
+            propagator: CreatePropagator(result.GetValue(opts.Propagation)),
+            conflictAnalyzer: CreateConflictAnalyzer(result.GetValue(opts.ConflictAnalysis)),
+            minimizer: CreateMinimizer(result.GetValue(opts.Minimization)),
             restartPolicy: CreateRestartPolicy(
-                Name(result, opts.Restart),
+                result.GetValue(opts.Restart),
                 result.GetValue(opts.RestartLimit),
                 result.GetValue(opts.RestartGrowth),
                 result.GetValue(opts.LubyUnit)),
-            clauseDeletionPolicy: CreateClauseDeletionPolicy(
-                deletion,
-                result.GetValue(opts.KeepLbd),
-                result.GetValue(opts.DeletionFraction)),
-            deletionSchedule: new LearnedClauseDeletionSchedule(
-                result.GetValue(opts.DeletionLimit),
-                result.GetValue(opts.DeletionGrowth),
-                isEnabled: deletion != "disabled"));
+            clauseDeletion: result.GetValue(opts.ClauseDeletion),
+            deletionLimit: result.GetValue(opts.DeletionLimit),
+            deletionGrowth: result.GetValue(opts.DeletionGrowth),
+            keepLbd: result.GetValue(opts.KeepLbd),
+            deletionFraction: result.GetValue(opts.DeletionFraction));
     }
 
-    private static string Name(ParseResult result, Option<string> option) =>
-        result.GetValue(option) ?? throw new InvalidOperationException($"Missing {option.Name} value.");
-
-    private static IDecisionHeuristic CreateHeuristic(string name, int seed) =>
-        name switch
+    private static IDecisionHeuristic CreateHeuristic(HeuristicMethod method, int seed) =>
+        method switch
         {
-            "first" => new FirstUnassignedHeuristic(),
-            "random" => new RandomDecisionHeuristic(seed),
-            "jw" => new StaticJeroslowWangDecisionHeuristic(),
-            "vsids" => new VsidsDecisionHeuristic(randomSeed: seed),
-            _ => throw new ArgumentOutOfRangeException(nameof(name))
+            HeuristicMethod.First => new FirstUnassignedHeuristic(),
+            HeuristicMethod.Random => new RandomDecisionHeuristic(seed),
+            HeuristicMethod.Jw => new StaticJeroslowWangDecisionHeuristic(),
+            HeuristicMethod.Vsids => new VsidsDecisionHeuristic(randomSeed: seed),
+            _ => throw new ArgumentOutOfRangeException(nameof(method))
         };
 
-    private static IPropagationEngine CreatePropagator(string name) => name switch
+    private static IPropagationEngine CreatePropagator(PropagationMethod method) => method switch
     {
-        "adjacency" => new AdjacencyListPropagator(),
-        "watched" => new WatchedLiteralPropagator(),
-        _ => throw new ArgumentOutOfRangeException(nameof(name))
+        PropagationMethod.Adjacency => new AdjacencyListPropagator(),
+        PropagationMethod.Watched => new WatchedLiteralPropagator(),
+        _ => throw new ArgumentOutOfRangeException(nameof(method))
     };
 
-    private static IConflictAnalyzer CreateConflictAnalyzer(string name) => name switch
+    private static IConflictAnalyzer CreateConflictAnalyzer(ConflictAnalysisMethod method) => method switch
     {
-        "first-uip" => new FirstUipConflictAnalyzer(),
-        "decision" => new DecisionLiteralConflictAnalyzer(),
-        "multiple" => new MultipleCutsConflictAnalyzer(),
-        _ => throw new ArgumentOutOfRangeException(nameof(name))
+        ConflictAnalysisMethod.FirstUip => new FirstUipConflictAnalyzer(),
+        ConflictAnalysisMethod.Decision => new DecisionLiteralConflictAnalyzer(),
+        ConflictAnalysisMethod.Multiple => new MultipleCutsConflictAnalyzer(),
+        _ => throw new ArgumentOutOfRangeException(nameof(method))
     };
 
-    private static ILearnedClauseMinimizer CreateMinimizer(string name) => name switch
+    private static ILearnedClauseMinimizer CreateMinimizer(MinimizationMethod method) => method switch
     {
-        "none" => new NoOpLearnedClauseMinimizer(),
-        "recursive" => new RecursiveReasonLearnedClauseMinimizer(),
-        "ssr" => new SelfSubsumingResolutionMinimizer(),
-        _ => throw new ArgumentOutOfRangeException(nameof(name))
+        MinimizationMethod.None => new NoOpLearnedClauseMinimizer(),
+        MinimizationMethod.Recursive => new RecursiveReasonLearnedClauseMinimizer(),
+        MinimizationMethod.Ssr => new SelfSubsumingResolutionMinimizer(),
+        _ => throw new ArgumentOutOfRangeException(nameof(method))
     };
 
-    private static IRestartPolicy CreateRestartPolicy(string name, int limit, double growth, int unit) => name switch
+    private static IRestartPolicy CreateRestartPolicy(RestartMethod method, int limit, double growth, int unit) => method switch
     {
-        "disabled" => new DisabledRestartPolicy(),
-        "geometric" => new GeometricRestartPolicy(limit, growth),
-        "luby" => new LubyRestartPolicy(unit),
-        _ => throw new ArgumentOutOfRangeException(nameof(name))
-    };
-
-    private static IClauseDeletionPolicy CreateClauseDeletionPolicy(
-        string name,
-        int keepLbd,
-        double fraction) => name switch
-    {
-        "disabled" => new DisabledClauseDeletionPolicy(),
-        "activity" => new ActivityClauseDeletionPolicy(keepLbd, fraction),
-        "lbd" => new LbdClauseDeletionPolicy(keepLbd, fraction),
-        "lbd-activity" => new LbdThenActivityClauseDeletionPolicy(keepLbd, fraction),
-        _ => throw new ArgumentOutOfRangeException(nameof(name))
+        RestartMethod.Disabled => new DisabledRestartPolicy(),
+        RestartMethod.Geometric => new GeometricRestartPolicy(limit, growth),
+        RestartMethod.Luby => new LubyRestartPolicy(unit),
+        _ => throw new ArgumentOutOfRangeException(nameof(method))
     };
 
     private static TextReader OpenInput(FileInfo? file) =>

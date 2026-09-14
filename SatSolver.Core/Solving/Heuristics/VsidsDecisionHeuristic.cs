@@ -13,7 +13,9 @@ public sealed class VsidsDecisionHeuristic : IConflictAwareDecisionHeuristic
     private readonly int _seed;
     private double[] _activity = [];
     private double _bump = 1;
-    private Random _random;
+    private int[] _tieRanks = [];
+    private SortedSet<(double NegativeActivity, int TieRank, int Variable)> _candidates = [];
+    private ISolverStateView? _state;
 
     public VsidsDecisionHeuristic(double decayFactor = 0.95, int randomSeed = 0)
     {
@@ -22,46 +24,50 @@ public sealed class VsidsDecisionHeuristic : IConflictAwareDecisionHeuristic
 
         _decay = decayFactor;
         _seed = randomSeed;
-        _random = new Random(randomSeed);
     }
 
     public void Initialize(CnfFormula formula)
     {
         ArgumentNullException.ThrowIfNull(formula);
 
+        if (_state is not null)
+            _state.VariableUnassigned -= OnVariableUnassigned;
+        _state = null;
         _activity = new double[formula.VariableCount + 1];
         _bump = 1;
-        _random = new Random(_seed);
+        // fixed seeded permutation breaks ties without scanning the tied variables.
+        _tieRanks = Enumerable.Range(0, formula.VariableCount + 1).ToArray();
+        new Random(_seed).Shuffle(_tieRanks.AsSpan(1));
+        RebuildCandidates();
     }
 
     public Literal? ChooseLiteral(ISolverStateView state)
     {
-        var bestVar = 0;
-        var best = double.NegativeInfinity;
-        var ties = 0;
+        ArgumentNullException.ThrowIfNull(state);
+        if (state.VariableCount != _activity.Length - 1)
+            throw new ArgumentException("The heuristic belongs to another formula size.", nameof(state));
 
-        for (var varId = 1; varId <= state.VariableCount; varId++)
+        if (!ReferenceEquals(_state, state))
         {
-            if (state.IsAssigned(varId))
-                continue;
-
-            var activity = _activity[varId];
-            if (activity > best)
+            if (_state is not null)
             {
-                bestVar = varId;
-                best = activity;
-                ties = 1;
-                continue;
+                _state.VariableUnassigned -= OnVariableUnassigned;
+                RebuildCandidates();
             }
-
-            // keep tied variables equally likely
-            if (activity == best && _random.Next(++ties) == 0)
-                bestVar = varId;
+            _state = state;
+            _state.VariableUnassigned += OnVariableUnassigned;
         }
 
-        return bestVar == 0
-            ? null
-            : new Literal(bestVar, IsNegated: true);
+        // remove assigned variables, once per assignment interval
+        while (_candidates.Count > 0)
+        {
+            var best = _candidates.Min;
+            if (!state.IsAssigned(best.Variable))
+                return new Literal(best.Variable, IsNegated: true);
+            _candidates.Remove(best);
+        }
+
+        return null;
     }
 
     public void OnLearnedClause(IReadOnlyList<Literal> clause)
@@ -79,7 +85,6 @@ public sealed class VsidsDecisionHeuristic : IConflictAwareDecisionHeuristic
 
     public void OnConflict()
     {
-        // decay by growing future bumps
         _bump /= _decay;
 
         if (_bump > ActivityRescaleLimit)
@@ -92,7 +97,10 @@ public sealed class VsidsDecisionHeuristic : IConflictAwareDecisionHeuristic
 
     private void BumpActivity(int varId)
     {
+        var wasCandidate = _candidates.Remove(PriorityOf(varId));
         _activity[varId] += _bump;
+        if (wasCandidate)
+            _candidates.Add(PriorityOf(varId));
 
         if (_activity[varId] > ActivityRescaleLimit)
             RescaleActivities();
@@ -104,5 +112,14 @@ public sealed class VsidsDecisionHeuristic : IConflictAwareDecisionHeuristic
             _activity[idx] *= ActivityRescaleFactor;
 
         _bump *= ActivityRescaleFactor;
+        _candidates = new(_candidates.Select(entry => PriorityOf(entry.Variable)));
     }
+
+    private (double NegativeActivity, int TieRank, int Variable) PriorityOf(int variable) =>
+        (-_activity[variable], _tieRanks[variable], variable);
+
+    private void OnVariableUnassigned(int variable) => _candidates.Add(PriorityOf(variable));
+
+    private void RebuildCandidates() =>
+        _candidates = new(Enumerable.Range(1, _activity.Length - 1).Select(PriorityOf));
 }

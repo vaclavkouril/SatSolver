@@ -89,6 +89,29 @@ public sealed class CdclMinimizationTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SelfSubsumingResolution_IndexTracksAdditionsAndDeletions(bool buildIndexFirst)
+    {
+        var formula = Formula(4, Clause(2, 3)); // wrong polarity must not be a candidate
+        var clauses = new ClauseDatabase(formula);
+        var state = CreateLevelOneState(formula, 2, 3, 4);
+        var source = LearnedClause(-4, 2, 3);
+        var minimizer = new SelfSubsumingResolutionMinimizer();
+        if (buildIndexFirst)
+            Assert.Equal(source.Literals, minimizer.Minimize(source, state, clauses).Literals);
+
+        var reference = clauses.AddLearned(LearnedClause(-2, 3));
+        Assert.Equal([Literal(-4), Literal(3)], minimizer.Minimize(source, state, clauses).Literals);
+        clauses.DeleteLearned(reference);
+        Assert.Equal(source.Literals, minimizer.Minimize(source, state, clauses).Literals);
+
+        var original = clauses.AddOriginal(Clause(-2, 3, -2));
+        Assert.Equal([Literal(-4), Literal(3)], minimizer.Minimize(source, state, clauses).Literals);
+        Assert.Equal([original], clauses.GetActiveClausesContaining(Literal(-2)).Select(c => c.Reference));
+    }
+
+    [Theory]
     [MemberData(nameof(Minimizers))]
     public void Solve_AllMinimizationMethods_ReturnSat(ILearnedClauseMinimizer minimizer)
     {

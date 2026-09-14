@@ -1,7 +1,6 @@
 using SatSolver.Core.Cnf;
 using SatSolver.Core.Solving.Cdcl;
 using SatSolver.Core.Solving.Cdcl.Analysis;
-using SatSolver.Core.Solving.Cdcl.Deletion;
 using SatSolver.Core.Solving.Cdcl.Minimization;
 using SatSolver.Core.Solving.Cdcl.Restarts;
 using SatSolver.Core.Solving.Contracts;
@@ -28,21 +27,24 @@ public sealed class CdclDifferentialTests
         }
     }
 
-    [Fact]
-    public void Solve_AggressiveMaintenance_MatchesExhaustiveSearch()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Solve_AggressiveMaintenance_MatchesExhaustiveSearch(bool useVsids)
     {
         var solver = new CdclSolver(
-            decisionHeuristic: new FirstUnassignedHeuristic(),
+            decisionHeuristic: useVsids ? new VsidsDecisionHeuristic() : new FirstUnassignedHeuristic(),
             propagator: new WatchedLiteralPropagator(),
             conflictAnalyzer: new FirstUipConflictAnalyzer(),
-            minimizer: new RecursiveReasonLearnedClauseMinimizer(),
+            minimizer: useVsids
+                ? new SelfSubsumingResolutionMinimizer()
+                : new RecursiveReasonLearnedClauseMinimizer(),
             restartPolicy: new GeometricRestartPolicy(initialConflictLimit: 1, growthFactor: 2),
-            clauseDeletionPolicy: new LbdThenActivityClauseDeletionPolicy(
-                permanentLbdLimit: 0,
-                deletionFraction: 1),
-            deletionSchedule: new LearnedClauseDeletionSchedule(
-                initialLearnedClauseLimit: 1,
-                growthFactor: 2));
+            clauseDeletion: ClauseDeletionMethod.LbdActivity,
+            keepLbd: 0,
+            deletionFraction: 1,
+            deletionLimit: 1,
+            deletionGrowth: 2);
 
         var results = new List<SolverResult>();
 
@@ -52,6 +54,8 @@ public sealed class CdclDifferentialTests
             var result = solver.Solve(formula);
 
             Assert.Equal(expectedStatus, result.Status);
+            if (result.Status == SolverStatus.SAT)
+                Assert.True(formula.Clauses.All(clause => clause.Literals.Any(result.Model.Contains)));
             results.Add(result);
         }
 
@@ -72,8 +76,7 @@ public sealed class CdclDifferentialTests
                         conflictAnalyzer: analyzer,
                         minimizer: minimizer,
                         restartPolicy: new DisabledRestartPolicy(),
-                        clauseDeletionPolicy: new DisabledClauseDeletionPolicy(),
-                        deletionSchedule: new LearnedClauseDeletionSchedule(isEnabled: false));
+                        clauseDeletion: ClauseDeletionMethod.Disabled);
                 }
             }
         }

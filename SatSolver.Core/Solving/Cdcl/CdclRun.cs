@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using SatSolver.Core.Cnf;
 using SatSolver.Core.Solving.Cdcl.Analysis;
-using SatSolver.Core.Solving.Cdcl.Deletion;
 using SatSolver.Core.Solving.Cdcl.Minimization;
 using SatSolver.Core.Solving.Cdcl.Restarts;
 using SatSolver.Core.Solving.Clauses;
@@ -22,8 +21,11 @@ internal sealed class CdclRun
     private readonly IConflictAnalyzer _analyzer;
     private readonly ILearnedClauseMinimizer _minimizer;
     private readonly IRestartPolicy _restart;
-    private readonly IClauseDeletionPolicy _deletion;
-    private readonly LearnedClauseDeletionSchedule _schedule;
+    private readonly ClauseDeletionMethod _clauseDeletion;
+    private readonly double _deletionGrowth;
+    private readonly int _keepLbd;
+    private readonly double _deletionFraction;
+    private int _deletionLimit;
     private int _conflicts;
 
     public CdclRun(
@@ -33,8 +35,11 @@ internal sealed class CdclRun
         IConflictAnalyzer analyzer,
         ILearnedClauseMinimizer minimizer,
         IRestartPolicy restart,
-        IClauseDeletionPolicy deletion,
-        LearnedClauseDeletionSchedule schedule)
+        ClauseDeletionMethod clauseDeletion,
+        int deletionLimit,
+        double deletionGrowth,
+        int keepLbd,
+        double deletionFraction)
     {
         ArgumentNullException.ThrowIfNull(formula);
         ArgumentNullException.ThrowIfNull(heuristic);
@@ -42,8 +47,6 @@ internal sealed class CdclRun
         ArgumentNullException.ThrowIfNull(analyzer);
         ArgumentNullException.ThrowIfNull(minimizer);
         ArgumentNullException.ThrowIfNull(restart);
-        ArgumentNullException.ThrowIfNull(deletion);
-        ArgumentNullException.ThrowIfNull(schedule);
 
         _heuristic = heuristic;
         _conflictHeuristic = heuristic as IConflictAwareDecisionHeuristic;
@@ -53,8 +56,11 @@ internal sealed class CdclRun
         _analyzer = analyzer;
         _minimizer = minimizer;
         _restart = restart;
-        _deletion = deletion;
-        _schedule = schedule;
+        _clauseDeletion = clauseDeletion;
+        _deletionLimit = deletionLimit;
+        _deletionGrowth = deletionGrowth;
+        _keepLbd = keepLbd;
+        _deletionFraction = deletionFraction;
     }
 
     public SolverResult Solve()
@@ -62,7 +68,6 @@ internal sealed class CdclRun
         _heuristic.Initialize(_state.Formula);
         _propagator.Initialize(_clauses);
         _restart.Reset();
-        _schedule.Reset();
 
         using var process = Process.GetCurrentProcess();
         var start = process.TotalProcessorTime;
@@ -184,13 +189,16 @@ internal sealed class CdclRun
 
     private void DeleteLearnedClauses()
     {
-        var learned = _clauses.LearnedClauses.ToArray();
-        if (!_schedule.ShouldDelete(learned.Length))
+        if (_clauseDeletion == ClauseDeletionMethod.Disabled ||
+            _clauses.ActiveLearnedClauseCount <= _deletionLimit)
             return;
 
-        var toDelete = _deletion.SelectForDeletion(
-            learned,
-            _state.GetLockedClauses());
+        var toDelete = SelectForDeletion(
+            _clauses.LearnedClauses,
+            _state.GetLockedClauses(),
+            _clauseDeletion,
+            _keepLbd,
+            _deletionFraction);
 
         foreach (var clauseRef in toDelete)
         {
@@ -198,7 +206,45 @@ internal sealed class CdclRun
             _statistics.RecordDeletedLearnedClause();
         }
 
-        _schedule.OnDeletionRound();
+        _deletionLimit = (int)Math.Min(int.MaxValue, Math.Ceiling(_deletionLimit * _deletionGrowth));
+    }
+
+    internal static IReadOnlyList<ClauseReference> SelectForDeletion(
+        IEnumerable<SolverClause> clauses,
+        IReadOnlySet<ClauseReference> lockedClauses,
+        ClauseDeletionMethod method,
+        int keepLbd,
+        double deletionFraction)
+    {
+        if (method == ClauseDeletionMethod.Disabled)
+            return [];
+
+        // Keep binaries, low-LBD clauses and reason clauses.
+        var eligible = clauses.Where(clause =>
+            clause.IsLearned && !clause.IsDeleted &&
+            clause.Literals.Count > 2 && clause.Lbd > keepLbd &&
+            !lockedClauses.Contains(clause.Reference));
+
+        Func<SolverClause, (double Primary, double Secondary)> priorityOf = method switch
+        {
+            ClauseDeletionMethod.Activity => clause => (clause.Activity, -clause.Lbd),
+            ClauseDeletionMethod.Lbd => clause => (-clause.Lbd, 0),
+            ClauseDeletionMethod.LbdActivity => clause => (-clause.Lbd, clause.Activity),
+            _ => throw new ArgumentOutOfRangeException(nameof(method))
+        };
+
+        // Bulk heapification costs O(m); extract only the k requested candidates.
+        // The input index preserves the stable ordering of equal priorities.
+        var candidates = new PriorityQueue<ClauseReference, (double, double, int)>(
+            eligible.Select((clause, index) =>
+            {
+                var priority = priorityOf(clause);
+                return (clause.Reference, (priority.Primary, priority.Secondary, index));
+            }));
+        var selected = new ClauseReference[(int)Math.Ceiling(candidates.Count * deletionFraction)];
+        for (var index = 0; index < selected.Length; index++)
+            selected[index] = candidates.Dequeue();
+        return selected;
     }
 
     private int GetAssertionLevel(LearnedClause clause)
